@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 
@@ -10,7 +11,7 @@ DATA_DIR = PROJECT_ROOT / "data"
 RAW_DATA_DIR = DATA_DIR / "raw"
 PROCESSED_DATA_DIR = DATA_DIR / "processed"
 CACHE_DATA_DIR = DATA_DIR / "cache"
-DATABASE_PATH = PROCESSED_DATA_DIR / "esma_search.duckdb"
+DATABASE_PATH = Path(os.getenv("ESMA_DATABASE_PATH", PROCESSED_DATA_DIR / "esma_search.duckdb"))
 
 DEFAULT_FITRS_LIMIT: int | None = None
 DEFAULT_FIRDS_LIMIT = 50_000

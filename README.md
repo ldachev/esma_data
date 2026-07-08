@@ -117,25 +117,27 @@ python -m src.ingest_firds --query "type_s:parent AND isin:GRS014003032"
 streamlit run app.py
 ```
 
-If no data is loaded, the app shows setup instructions instead of silently falling back to fake rows.
+If no local DuckDB data is loaded, the app still works in live ESMA search mode. Global Search, ISIN Explorer, and Venue Explorer query ESMA directly and return 20 rows at a time.
 
 ## Streamlit Cloud First Run
 
-Streamlit Cloud does not receive your local DuckDB file. On first deploy the app may show **No ESMA data has been loaded into DuckDB yet**. Click **Load starter ESMA dataset** in the app to fetch a small official ESMA starter dataset and build `data/processed/esma_search.duckdb` inside the cloud container.
+Streamlit Cloud does not receive your local DuckDB file. That is fine: the deployed app now starts in **live ESMA search mode**.
 
-The starter loader ingests:
+In live mode:
 
-- 20,000 FITRS equity transparency rows
-- 5,000 FIRDS reference rows
+- Search results are fetched directly from ESMA public Solr/register endpoints.
+- The app shows the first 20 rows.
+- Use **Next 20** and **Previous 20** to page through more ESMA results.
+- No sample or fake data is required.
 
-For larger datasets, run the ingestion commands locally or increase the limits in `app.py`.
+The local DuckDB ingestion commands are still available for heavier local analytics and the Liquidity Screener.
 
 ## App Pages
 
-- **Global Search**: search ISIN, MIC, venue name, or instrument name across FITRS and FIRDS.
-- **ISIN Explorer**: enter an ISIN and inspect all FITRS records, FIRDS records, and all venues/MICs where it appears.
-- **Venue Explorer**: browse the full loaded MIC universe and page through all instruments for a selected venue, including smaller venues such as `XATH`.
-- **Liquidity Screener**: filter by liquidity status, MIC, country, instrument type, calculation date, reference period, turnover, and transaction count.
+- **Global Search**: live search ISIN/MIC fields against FITRS and FIRDS, 20 ESMA rows at a time.
+- **ISIN Explorer**: enter an ISIN and inspect live FITRS and FIRDS records.
+- **Venue Explorer**: search a MIC such as `XATH` and page through live ESMA FITRS results 20 rows at a time.
+- **Liquidity Screener**: filter by liquidity status, MIC, country, instrument type, calculation date, reference period, turnover, and transaction count when a local DuckDB cache is loaded.
 - **Data Health**: inspect row counts, distinct ISINs/MICs, latest calculation date, source batches, and null rates.
 
 ## Searching
