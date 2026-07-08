@@ -1,290 +1,251 @@
 from __future__ import annotations
 
 import pandas as pd
-import plotly.express as px
 import streamlit as st
 
-from src.config import DEFAULT_SORT_COLUMN
-from src.database import distinct_values, initialize_database, query_securities
-from src.esma_client import DatasetResult, esma_data_py_status, load_or_build_dataset
-
-
-st.set_page_config(
-    page_title="ESMA Securities Liquidity Dashboard",
-    page_icon="EU",
-    layout="wide",
+from src.config import DATABASE_PATH, DEFAULT_PAGE_SIZE
+from src.database import connect, data_health, diagnostics_for_isin, lookup_values, null_rates, source_files
+from src.search_index import (
+    export_liquidity_screener,
+    global_search,
+    isin_firds,
+    isin_fitrs,
+    isin_venues,
+    liquidity_screener,
+    venue_instruments,
+    venue_lookup,
 )
+from src.ui_components import dataframe, empty_state, metric_row, pagination_controls, setup_instructions
+from src.utils import normalize_upper
 
+
+st.set_page_config(page_title="ESMA Equity Search", page_icon="EU", layout="wide")
 
 st.markdown(
     """
     <style>
-    .block-container { padding-top: 1.5rem; }
-    .metric-card {
-        border: 1px solid #e5e7eb;
-        border-radius: 8px;
-        padding: 1rem;
-        background: #ffffff;
-    }
-    .metric-label {
-        color: #64748b;
-        font-size: 0.85rem;
-        margin-bottom: 0.35rem;
-    }
-    .metric-value {
-        color: #0f172a;
-        font-size: 1.6rem;
-        font-weight: 700;
-    }
-    .small-muted { color: #64748b; font-size: 0.9rem; }
+    .block-container { padding-top: 1.3rem; }
+    .small-note { color: #64748b; font-size: 0.9rem; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
 
-@st.cache_data(show_spinner="Loading ESMA dashboard data...")
-def load_dashboard_data(try_live: bool, force_download: bool) -> DatasetResult:
-    return load_or_build_dataset(try_live=try_live, force_download=force_download)
+@st.cache_resource
+def db_connection():
+    return connect()
 
 
-def metric_card(label: str, value: str) -> None:
-    st.markdown(
-        f"""
-        <div class="metric-card">
-            <div class="metric-label">{label}</div>
-            <div class="metric-value">{value}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+@st.cache_data(ttl=300)
+def cached_lookup(kind: str) -> list[str]:
+    with connect() as conn:
+        return lookup_values(conn, kind)
+
+
+def selected_row(event, frame: pd.DataFrame) -> pd.Series | None:
+    try:
+        rows = event.selection.rows
+    except Exception:
+        rows = []
+    if not rows:
+        return None
+    return frame.iloc[rows[0]]
+
+
+def render_table_with_selection(df: pd.DataFrame, key: str):
+    return st.dataframe(
+        df,
+        width="stretch",
+        hide_index=True,
+        height=420,
+        selection_mode="single-row",
+        on_select="rerun",
+        key=key,
     )
 
 
-def multiselect_filter(label: str, column: str, help_text: str) -> list[str]:
-    values = distinct_values(column)
-    return st.sidebar.multiselect(label, values, help=help_text)
+conn = db_connection()
+health = data_health(conn)
 
-
-def date_bounds(frame: pd.DataFrame) -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
-    if "calculation_date" not in frame:
-        return None, None
-    dates = pd.to_datetime(frame["calculation_date"], errors="coerce").dropna()
-    if dates.empty:
-        return None, None
-    return dates.min(), dates.max()
-
-
-st.title("ESMA Securities Liquidity and Trading Venue Dashboard")
+st.title("ESMA Equity Transparency and FIRDS Search")
 st.caption(
-    "Explore European securities using ESMA-style FIRDS instrument reference fields, "
-    "FITRS transparency/liquidity metrics, and trading venue MIC metadata."
+    "Search ESMA Equity Transparency Calculation Results and connect them to FIRDS instrument reference data."
 )
 
-with st.sidebar:
-    st.header("Data")
-    try_live = st.toggle(
-        "Try live ESMA refresh",
-        value=False,
-        help=(
-            "Downloads a small sample of public FIRDS/FITRS register files from ESMA and caches "
-            "them under data/raw. If this fails, the app falls back to sample data."
-        ),
-    )
-    force_download = st.checkbox("Force re-download cached files", value=False)
-    if st.button("Reload data"):
-        load_dashboard_data.clear()
-        st.rerun()
+source_state = "No data loaded"
+if health["fitrs_equity_results_rows"] or health["firds_instruments_rows"]:
+    source_state = "Local DuckDB cache built from official ESMA register/Solr data"
 
-
-dataset = load_dashboard_data(try_live=try_live, force_download=force_download)
-engine = initialize_database(dataset.frame)
-
-with st.sidebar:
-    st.header("Filters")
-    isin_search = st.text_input("ISIN search", help="Find a full or partial International Securities Identification Number.")
-    name_search = st.text_input("Instrument name search", help="Search by issuer or instrument name.")
-    asset_classes = multiselect_filter("Asset class", "asset_class", "Filter by shares, ETFs, bonds, derivatives, or other classes.")
-    mic_codes = multiselect_filter("Venue / MIC code", "mic_code", "Market Identifier Code for the trading venue.")
-    venue_types = multiselect_filter("Venue type", "venue_type", "Examples include RM, MTF, OTF, and SI where available.")
-    countries = multiselect_filter("Country", "country", "Country code associated with the venue or competent authority.")
-    liquidity_statuses = multiselect_filter("Liquidity status", "liquidity_status", "FITRS-style liquidity classification where available.")
-
-    min_date, max_date = date_bounds(dataset.frame)
-    selected_dates = None
-    if min_date is not None and max_date is not None:
-        selected_dates = st.date_input(
-            "Calculation date / reference period",
-            value=(min_date.date(), max_date.date()),
-            min_value=min_date.date(),
-            max_value=max_date.date(),
-            help="Calculation or publication date after ESMA schema normalization.",
-        )
-
-    st.header("Sorting")
-    sort_by = st.selectbox(
-        "Default sort",
-        [
-            "avg_daily_turnover",
-            "avg_daily_transactions",
-            "calculation_date",
-            "instrument_name",
-            "mic_code",
-            "country",
-        ],
-        index=0,
-        help="The interactive table remains sortable after loading.",
-    )
-    sort_desc = st.checkbox("Descending", value=True)
-    table_limit = st.slider("Maximum rows", min_value=100, max_value=10000, value=2500, step=100)
-
-
-filters = {
-    "isin_search": isin_search,
-    "name_search": name_search,
-    "asset_classes": asset_classes,
-    "mic_codes": mic_codes,
-    "venue_types": venue_types,
-    "countries": countries,
-    "liquidity_statuses": liquidity_statuses,
-    "date_range": selected_dates if isinstance(selected_dates, tuple) and len(selected_dates) == 2 else None,
-}
-
-filtered = query_securities(
-    filters=filters,
-    sort_by=sort_by or DEFAULT_SORT_COLUMN,
-    sort_desc=sort_desc,
-    limit=table_limit,
-)
-
-status = esma_data_py_status()
-source_note = "Sample fallback data" if dataset.used_sample else "Processed ESMA cache"
 st.markdown(
-    f"<span class='small-muted'>Storage engine: {engine.upper()} | Source: {source_note} | "
-    f"esma_data_py: {'available' if status['available'] else 'not installed'}</span>",
+    f"<span class='small-note'>Database: {DATABASE_PATH} | Source state: {source_state}</span>",
     unsafe_allow_html=True,
 )
 
-with st.expander("Data loading notes", expanded=dataset.used_sample):
-    for message in dataset.messages:
-        st.write(f"- {message}")
-    st.write(
-        "FIRDS is ESMA's Financial Instruments Reference Data System. "
-        "FITRS is ESMA's Financial Instruments Transparency System, which includes transparency "
-        "and liquidity calculations used by MiFID II/MiFIR workflows."
-    )
-
-total_instruments = filtered["isin"].nunique() if not filtered.empty else 0
-venue_count = filtered["mic_code"].nunique() if not filtered.empty else 0
-liquid_count = (
-    filtered.loc[filtered["liquidity_status"].str.lower().eq("liquid"), "isin"].nunique()
-    if not filtered.empty and "liquidity_status" in filtered
-    else 0
-)
-top_venue = "N/A"
-if not filtered.empty:
-    venue_counts = filtered.dropna(subset=["mic_code"]).groupby("mic_code")["isin"].nunique().sort_values(ascending=False)
-    if not venue_counts.empty:
-        top_venue = f"{venue_counts.index[0]} ({venue_counts.iloc[0]:,})"
-
-cols = st.columns(4)
-with cols[0]:
-    metric_card("Total instruments", f"{total_instruments:,}")
-with cols[1]:
-    metric_card("Trading venues", f"{venue_count:,}")
-with cols[2]:
-    metric_card("Liquid instruments", f"{liquid_count:,}")
-with cols[3]:
-    metric_card("Top venue", top_venue)
-
-st.divider()
-
-if filtered.empty:
-    st.info("No instruments match the current filters. Try broadening the search or clearing a sidebar filter.")
+if not health["fitrs_equity_results_rows"] and not health["firds_instruments_rows"]:
+    setup_instructions()
     st.stop()
 
-chart_left, chart_right = st.columns(2)
+tabs = st.tabs(["Global Search", "ISIN Explorer", "Venue Explorer", "Liquidity Screener", "Data Health"])
 
-with chart_left:
-    top_venues = (
-        filtered.groupby(["mic_code", "trading_venue"], dropna=False)["isin"]
-        .nunique()
-        .reset_index(name="instrument_count")
-        .sort_values("instrument_count", ascending=False)
-        .head(10)
+with tabs[0]:
+    st.subheader("Global Search")
+    st.write("Search by ISIN, MIC, venue name, or instrument name across FITRS equities and FIRDS.")
+    term = st.text_input("Search term", placeholder="Example: XATH, NL0010273215, Allianz, Euronext")
+    col_a, col_b = st.columns([1, 3])
+    with col_a:
+        page_size = st.selectbox("Rows per page", [25, 50, 100, 250], index=2, key="global_size")
+    offset = 0
+    if term:
+        results = global_search(conn, term, limit=page_size, offset=offset)
+        if results.empty:
+            empty_state("No results found. Try a broader ISIN, MIC, venue, or name search.")
+        else:
+            event = render_table_with_selection(results, "global_results")
+            row = selected_row(event, results)
+            if row is not None:
+                st.markdown("**Selected result details**")
+                isin = row.get("isin")
+                mic = row.get("mic")
+                detail_cols = st.columns(2)
+                with detail_cols[0]:
+                    st.write(f"ISIN: `{isin}`")
+                    dataframe(isin_fitrs(conn, str(isin)), height=260)
+                with detail_cols[1]:
+                    st.write(f"Venue/MIC: `{mic}`")
+                    venue_df, total = venue_instruments(conn, str(mic), limit=50, offset=0)
+                    st.caption(f"{total:,} FITRS records for this MIC.")
+                    dataframe(venue_df, height=260)
+
+with tabs[1]:
+    st.subheader("ISIN Explorer")
+    isin = st.text_input("Enter ISIN", placeholder="Example: GRS014003032", key="isin_explorer").strip()
+    if isin:
+        isin_key = normalize_upper(isin)
+        fitrs = isin_fitrs(conn, isin_key)
+        firds = isin_firds(conn, isin_key)
+        venues = isin_venues(conn, isin_key)
+        metric_row(
+            {
+                "FITRS records": f"{len(fitrs):,}",
+                "FIRDS records": f"{len(firds):,}",
+                "Venues/MICs": f"{len(venues):,}",
+            }
+        )
+        if fitrs.empty and firds.empty:
+            st.warning("This ISIN was not found in the currently loaded data.")
+            st.json(diagnostics_for_isin(conn, isin_key))
+        else:
+            st.markdown("**All venues where this ISIN appears**")
+            dataframe(venues, height=260)
+            st.markdown("**FITRS equity transparency records**")
+            dataframe(fitrs, height=360)
+            st.markdown("**FIRDS reference records**")
+            dataframe(firds, height=360)
+
+with tabs[2]:
+    st.subheader("Venue Explorer")
+    st.write("Browse the full loaded venue/MIC universe, including smaller venues.")
+    venue_search_term = st.text_input("Search MIC or venue name", placeholder="Example: XATH", key="venue_search")
+    venues = venue_lookup(conn, venue_search_term, limit=1000)
+    if venues.empty:
+        empty_state("No venues match that search in the loaded data.")
+    else:
+        venue_event = render_table_with_selection(venues, "venue_results")
+        selected = selected_row(venue_event, venues)
+        default_mic = str(selected["mic"]) if selected is not None else str(venues.iloc[0]["mic"])
+        selected_mic = st.text_input("Selected MIC", value=default_mic, key="selected_mic").strip()
+        sort_col, dir_col, size_col = st.columns(3)
+        with sort_col:
+            sort_by = st.selectbox(
+                "Sort instruments by",
+                ["avg_daily_turnover", "avg_daily_transactions", "instrument_name", "isin", "liquidity_status"],
+                index=0,
+            )
+        with dir_col:
+            sort_desc = st.checkbox("Descending", value=True, key="venue_sort_desc")
+        with size_col:
+            page_size = st.selectbox("Page size", [50, 100, 250, 500], index=1, key="venue_page_size")
+        preview_df, total = venue_instruments(conn, selected_mic, limit=1, offset=0)
+        limit, offset = pagination_controls("Venue instruments", total, page_size)
+        instruments, total = venue_instruments(conn, selected_mic, limit=limit, offset=offset, sort_by=sort_by, sort_desc=sort_desc)
+        if instruments.empty:
+            empty_state("No FITRS equity instruments are loaded for this venue/MIC.")
+        else:
+            dataframe(instruments, height=520)
+
+with tabs[3]:
+    st.subheader("Liquidity Screener")
+    st.write("Filter all loaded FITRS equity records with paginated DuckDB queries.")
+    with st.sidebar:
+        st.header("Screener Filters")
+        search = st.text_input("ISIN, MIC, or name contains", key="screen_search")
+        liquidity = st.selectbox("Liquidity status", [""] + cached_lookup("liquidity"))
+        mic = st.selectbox("MIC", [""] + cached_lookup("mic"))
+        country = st.selectbox("Country", [""] + cached_lookup("country"))
+        instrument_type = st.selectbox("Instrument type", [""] + cached_lookup("instrument_type"))
+        reference_period = st.selectbox("Reference period", [""] + cached_lookup("reference_period"))
+        min_turnover = st.number_input("Minimum average daily turnover", min_value=0.0, value=0.0, step=1000.0)
+        min_transactions = st.number_input("Minimum average daily transactions", min_value=0.0, value=0.0, step=1.0)
+        date_range = st.date_input("Calculation date range", value=())
+    sort_col, dir_col, size_col = st.columns(3)
+    with sort_col:
+        sort_by = st.selectbox(
+            "Sort by",
+            ["avg_daily_turnover", "avg_daily_transactions", "calculation_date", "instrument_name", "isin", "mic", "liquidity_status"],
+            index=0,
+        )
+    with dir_col:
+        sort_desc = st.checkbox("Descending", value=True, key="screen_sort_desc")
+    with size_col:
+        page_size = st.selectbox("Rows per page", [50, 100, 250, 500, 1000], index=1, key="screen_page_size")
+
+    date_from = date_to = None
+    if isinstance(date_range, tuple) and len(date_range) == 2:
+        date_from, date_to = date_range
+    filters = {
+        "search": search,
+        "liquidity_status": liquidity or None,
+        "mic": mic or None,
+        "country": country or None,
+        "instrument_type": instrument_type or None,
+        "reference_period": reference_period or None,
+        "min_turnover": min_turnover if min_turnover else None,
+        "min_transactions": min_transactions if min_transactions else None,
+        "date_from": date_from,
+        "date_to": date_to,
+        "sort_by": sort_by,
+        "sort_desc": sort_desc,
+    }
+    _first, total = liquidity_screener(conn, filters, limit=1, offset=0)
+    limit, offset = pagination_controls("Screener", total, page_size)
+    screen_df, total = liquidity_screener(conn, filters, limit=limit, offset=offset)
+    if screen_df.empty:
+        empty_state("No records match the current screener filters.")
+        if search:
+            st.json(diagnostics_for_isin(conn, search, {"mic": mic}))
+    else:
+        dataframe(screen_df, height=520)
+        export_df = export_liquidity_screener(conn, filters)
+        st.download_button(
+            "Export filtered results as CSV",
+            data=export_df.to_csv(index=False).encode("utf-8"),
+            file_name="esma_liquidity_screener_export.csv",
+            mime="text/csv",
+        )
+
+with tabs[4]:
+    st.subheader("Data Health")
+    metric_row(
+        {
+            "FITRS rows": f"{health['fitrs_equity_results_rows']:,}",
+            "FIRDS rows": f"{health['firds_instruments_rows']:,}",
+            "Distinct ISINs": f"{health['distinct_isins']:,}",
+            "Distinct MICs": f"{health['distinct_mics']:,}",
+            "Latest calculation date": health["latest_calculation_date"] or "N/A",
+        }
     )
-    top_venues["venue_label"] = top_venues["mic_code"].fillna("UNKNOWN") + " - " + top_venues["trading_venue"].fillna("")
-    fig = px.bar(
-        top_venues,
-        x="instrument_count",
-        y="venue_label",
-        orientation="h",
-        title="Top 10 venues by number of instruments",
-        labels={"instrument_count": "Instruments", "venue_label": "Venue"},
-    )
-    fig.update_layout(yaxis={"categoryorder": "total ascending"}, height=380, margin=dict(l=10, r=10, t=50, b=10))
-    st.plotly_chart(fig, width="stretch")
-
-with chart_right:
-    venue_turnover = (
-        filtered.groupby(["mic_code", "trading_venue"], dropna=False)["avg_daily_turnover"]
-        .sum(min_count=1)
-        .reset_index()
-        .sort_values("avg_daily_turnover", ascending=False)
-        .head(10)
-    )
-    venue_turnover["venue_label"] = venue_turnover["mic_code"].fillna("UNKNOWN") + " - " + venue_turnover["trading_venue"].fillna("")
-    fig = px.bar(
-        venue_turnover,
-        x="avg_daily_turnover",
-        y="venue_label",
-        orientation="h",
-        title="Top 10 venues by average daily turnover",
-        labels={"avg_daily_turnover": "Average daily turnover", "venue_label": "Venue"},
-    )
-    fig.update_layout(yaxis={"categoryorder": "total ascending"}, height=380, margin=dict(l=10, r=10, t=50, b=10))
-    st.plotly_chart(fig, width="stretch")
-
-asset_counts = filtered.groupby("asset_class", dropna=False)["isin"].nunique().reset_index(name="instrument_count")
-fig = px.pie(
-    asset_counts,
-    names="asset_class",
-    values="instrument_count",
-    title="Asset class distribution",
-    hole=0.42,
-)
-fig.update_layout(height=360, margin=dict(l=10, r=10, t=50, b=10))
-st.plotly_chart(fig, width="stretch")
-
-st.subheader("Filtered securities")
-display_columns = [
-    "isin",
-    "instrument_name",
-    "asset_class",
-    "trading_venue",
-    "mic_code",
-    "venue_type",
-    "country",
-    "liquidity_status",
-    "avg_daily_turnover",
-    "avg_daily_transactions",
-    "calculation_date",
-    "reference_period",
-]
-st.dataframe(
-    filtered[display_columns],
-    width="stretch",
-    hide_index=True,
-    column_config={
-        "avg_daily_turnover": st.column_config.NumberColumn("Avg daily turnover", format="%.0f"),
-        "avg_daily_transactions": st.column_config.NumberColumn("Avg daily transactions", format="%.0f"),
-        "calculation_date": st.column_config.DateColumn("Calculation date"),
-    },
-)
-
-csv = filtered.to_csv(index=False).encode("utf-8")
-st.download_button(
-    "Download filtered results as CSV",
-    data=csv,
-    file_name="esma_filtered_securities.csv",
-    mime="text/csv",
-)
+    st.markdown("**Source files / batches ingested**")
+    dataframe(source_files(conn), height=300)
+    st.markdown("**Missing/null rates for important fields**")
+    dataframe(null_rates(conn), height=420)

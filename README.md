@@ -1,51 +1,77 @@
-# ESMA Securities Liquidity Dashboard
+# ESMA Equity Transparency and FIRDS Search
 
-Interactive Streamlit dashboard for exploring securities traded on regulated European trading venues using ESMA-style FIRDS, FITRS, and MIC/trading venue fields.
+Production-style local Streamlit application for searching ESMA equity transparency calculation results and connecting them to FIRDS instrument reference data.
 
-The project is structured as a GitHub-ready Python MVP. It starts with equities/shares and a small fallback dataset so the app runs offline, while leaving a clear ingestion path for larger production ESMA files.
+This is not a leaderboard dashboard. It is a DuckDB-backed search and browsing wrapper over official ESMA register/Solr data.
 
-## What It Does
+## What It Uses
 
-- Search securities by ISIN and instrument name.
-- Filter by asset class, MIC code, venue type, country, liquidity status, and calculation/reference date.
-- View headline KPIs for instruments, venues, liquid instruments, and the top venue.
-- Explore charts for top venues by instrument count, top venues by turnover, and asset class distribution.
-- Sort and inspect an interactive table.
-- Export filtered results to CSV.
-- Cache raw ESMA files under `data/raw/` and processed data under `data/processed/`.
-- Store processed data in DuckDB, with SQLite fallback if DuckDB is unavailable.
+### ESMA FITRS Equities
 
-## ESMA Data Sources
+ESMA Equity Transparency Calculation Results are published through the FITRS equities register:
 
-The code is designed around these public ESMA datasets and concepts:
+`https://registers.esma.europa.eu/publication/searchRegister?core=esma_registers_fitrs_equities`
 
-- **FIRDS**: Financial Instruments Reference Data System, used for instrument identifiers and reference attributes.
-- **FITRS**: Financial Instruments Transparency System, used for transparency and liquidity calculations such as liquidity status, average daily turnover, and average daily number of transactions.
-- **MiFID II trading venue metadata**: MIC code, trading venue name, venue type, and country where available.
+These records include equity transparency and liquidity calculation fields such as:
 
-The live ingestion helper queries ESMA public register indexes:
+- ISIN
+- MIC / most relevant market
+- MiFIR identifier
+- CFI code
+- liquidity flag
+- average daily turnover
+- average daily number of transactions
+- calculation date
+- reference/calculation period
 
-- `https://registers.esma.europa.eu/solr/esma_registers_firds_files/select`
-- `https://registers.esma.europa.eu/solr/esma_registers_fitrs_files/select`
+### ESMA FIRDS
 
-The project also detects the optional `esma_data_py` package when installed. It is not pinned in `requirements.txt` because the public distribution name can differ from the import name; install it from the official ESMA GitHub/package instructions for your environment, then the dashboard will report that it is available. The current MVP keeps that integration conservative because ESMA files can be large and schemas vary by file type.
+FIRDS is the Financial Instruments Reference Data System:
+
+`https://registers.esma.europa.eu/publication/searchRegister?core=esma_registers_firds`
+
+FIRDS contains instrument reference records such as:
+
+- ISIN
+- full and short instrument names
+- CFI/classification
+- issuer LEI
+- MIC / trading venue
+- admission and termination dates
+- reference country / RCA fields where available
+
+## How FITRS and FIRDS Relate
+
+FITRS gives transparency and liquidity calculations. FIRDS gives instrument reference attributes. The app joins them where possible on `ISIN` and `MIC`, but it deliberately does not drop unmatched records.
+
+Some ISINs can appear in FITRS but not in the loaded FIRDS slice, and vice versa. Reasons include:
+
+- FIRDS is vastly larger than FITRS and may be ingested only as a bounded local slice.
+- ESMA publishes different registers on different schedules.
+- FITRS equity calculations are specific to transparency calculations, while FIRDS is broader reference data.
+- MIC or instrument identifiers can differ across historical records.
 
 ## Project Structure
 
 ```text
 .
 ├── app.py
-├── requirements.txt
-├── README.md
+├── src/
+│   ├── esma_sources.py
+│   ├── ingest_fitrs_equities.py
+│   ├── ingest_firds.py
+│   ├── schema_mapper.py
+│   ├── search_index.py
+│   ├── database.py
+│   ├── ui_components.py
+│   └── utils.py
 ├── data/
 │   ├── raw/
-│   └── processed/
-└── src/
-    ├── __init__.py
-    ├── config.py
-    ├── database.py
-    ├── data_processing.py
-    └── esma_client.py
+│   ├── processed/
+│   └── cache/
+├── tests/
+├── requirements.txt
+└── README.md
 ```
 
 ## Install
@@ -54,40 +80,103 @@ The project also detects the optional `esma_data_py` package when installed. It 
 pip install -r requirements.txt
 ```
 
+## Ingest Data
+
+Load all currently available ESMA FITRS equity transparency results:
+
+```bash
+python -m src.ingest_fitrs_equities
+```
+
+Load a bounded FIRDS reference slice:
+
+```bash
+python -m src.ingest_firds
+```
+
+FIRDS is extremely large. The default FIRDS command loads a bounded slice so the local app remains practical. To change this:
+
+```bash
+python -m src.ingest_firds --limit 100000
+python -m src.ingest_firds --limit 0
+```
+
+Use `--limit 0` only when you intentionally want an unbounded production-scale ingest.
+
+Useful options:
+
+```bash
+python -m src.ingest_fitrs_equities --reset --batch-size 10000
+python -m src.ingest_firds --reset --limit 50000 --batch-size 1000
+python -m src.ingest_firds --query "type_s:parent AND isin:GRS014003032"
+```
+
 ## Run
 
 ```bash
 streamlit run app.py
 ```
 
-The app starts with sample data if no processed ESMA data exists. In the sidebar, enable **Try live ESMA refresh** and click **Reload data** to attempt a small live ESMA download into `data/raw/`. Very large ESMA archives are skipped by default to keep the MVP responsive.
+If no data is loaded, the app shows setup instructions instead of silently falling back to fake rows.
 
-## GitHub Pages
+## App Pages
 
-GitHub Pages can display this repository's static project overview from `docs/index.html`, but it cannot run the interactive Streamlit dashboard because Pages only serves static files. For the live app, deploy to Streamlit Community Cloud or another Python app host.
+- **Global Search**: search ISIN, MIC, venue name, or instrument name across FITRS and FIRDS.
+- **ISIN Explorer**: enter an ISIN and inspect all FITRS records, FIRDS records, and all venues/MICs where it appears.
+- **Venue Explorer**: browse the full loaded MIC universe and page through all instruments for a selected venue, including smaller venues such as `XATH`.
+- **Liquidity Screener**: filter by liquidity status, MIC, country, instrument type, calculation date, reference period, turnover, and transaction count.
+- **Data Health**: inspect row counts, distinct ISINs/MICs, latest calculation date, source batches, and null rates.
 
-## Data Pipeline
+## Searching
 
-1. `src/esma_client.py` downloads or loads ESMA register-backed files.
-2. Raw files are cached locally under `data/raw/firds/` and `data/raw/fitrs/`.
-3. `src/data_processing.py` parses CSV, XML, JSON, Excel, or ZIP inputs where possible.
-4. Column names are normalized through a schema mapping layer to reduce fragility across ESMA file variants.
-5. FIRDS reference rows and FITRS liquidity rows are joined on ISIN and MIC code where available.
-6. Processed data is saved to `data/processed/securities_liquidity.csv`.
-7. `src/database.py` stores the processed dataset in DuckDB for fast filtering.
+Search is case-insensitive for ISIN and MIC fields. Examples:
+
+```text
+XATH
+GRS014003032
+NL0010273215
+```
+
+Partial text search is supported for venue and instrument names where those names are loaded from FIRDS or available in FITRS.
+
+## Local Database
+
+The app stores normalized data in:
+
+```text
+data/processed/esma_search.duckdb
+```
+
+Logical tables:
+
+- `fitrs_equity_results`
+- `firds_instruments`
+- `trading_venues`
+
+The app queries DuckDB directly using SQL with `LIMIT` / `OFFSET` pagination and avoids loading the full dataset into Streamlit memory.
+
+## Tests
+
+```bash
+python -m pytest -q
+```
+
+Tests cover:
+
+- alternate ESMA column-name mapping
+- case-insensitive ISIN and MIC search
+- non-top venue browsing
+- liquidity sorting
+- FITRS/FIRDS joins without dropping unmatched records
+- operation when only FITRS or only FIRDS is loaded
 
 ## Known Limitations
 
-- The live ingestion path intentionally downloads only a small number of files by default and skips archives larger than 75 MB.
-- Full FIRDS/FITRS production ingestion may require streaming XML parsing and dataset-specific schema handlers because ESMA files can be very large.
-- Venue type and country are populated only when present in the source data or fallback sample.
-- The bundled sample data is illustrative and should not be treated as official ESMA calculations.
+- FIRDS is huge, so the default local command intentionally ingests a bounded slice.
+- Some FITRS rows do not include an instrument name; FIRDS enrichment depends on matching loaded reference rows.
+- MIC country and venue type fields are only as complete as the loaded FIRDS/venue metadata.
+- ESMA schemas and field names vary across endpoints and publication formats; `src/schema_mapper.py` handles common aliases but may need extension for new file schemas.
 
-## Future Improvements
+## GitHub Pages
 
-- Add production-grade streaming parsers for large FIRDS and FITRS XML archives.
-- Expand beyond shares/equities to bonds, derivatives, ETFs, and structured finance products.
-- Add scheduled refresh jobs and incremental DuckDB loading.
-- Add a dedicated MIC/trading venue reference ingestion source.
-- Add tests for schema normalization and joins.
-- Add deployment instructions for Streamlit Community Cloud or another hosting target.
+GitHub Pages can host the static overview under `docs/`, but it cannot run the Streamlit app. Deploy the interactive app to Streamlit Community Cloud or another Python app host.
