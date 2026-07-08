@@ -5,6 +5,8 @@ import streamlit as st
 
 from src.config import DATABASE_PATH, DEFAULT_PAGE_SIZE
 from src.database import connect, data_health, diagnostics_for_isin, lookup_values, null_rates, source_files
+from src.ingest_firds import ingest_firds
+from src.ingest_fitrs_equities import ingest_fitrs_equities
 from src.search_index import (
     export_liquidity_screener,
     global_search,
@@ -65,6 +67,16 @@ def render_table_with_selection(df: pd.DataFrame, key: str):
     )
 
 
+def bootstrap_starter_data() -> None:
+    """Load a small official ESMA dataset suitable for first Streamlit Cloud run."""
+
+    conn.close()
+    db_connection.clear()
+    cached_lookup.clear()
+    ingest_fitrs_equities(limit=20_000, batch_size=5_000, reset=True)
+    ingest_firds(limit=5_000, batch_size=1_000, reset=True)
+
+
 conn = db_connection()
 health = data_health(conn)
 
@@ -84,6 +96,20 @@ st.markdown(
 
 if not health["fitrs_equity_results_rows"] and not health["firds_instruments_rows"]:
     setup_instructions()
+    st.markdown("**Streamlit Cloud quick start**")
+    st.write(
+        "Click the button below to load a starter dataset from the official ESMA registers. "
+        "This writes a local DuckDB file inside the Streamlit Cloud app container."
+    )
+    if st.button("Load starter ESMA dataset", type="primary"):
+        with st.spinner("Loading official ESMA FITRS/FIRDS starter data. This can take a minute..."):
+            try:
+                bootstrap_starter_data()
+            except Exception as exc:
+                st.error(f"Starter ingestion failed: {exc}")
+                st.stop()
+        st.success("Starter ESMA data loaded. Reloading the app...")
+        st.rerun()
     st.stop()
 
 tabs = st.tabs(["Global Search", "ISIN Explorer", "Venue Explorer", "Liquidity Screener", "Data Health"])

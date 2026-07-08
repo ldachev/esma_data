@@ -41,7 +41,9 @@ def setup_instructions() -> None:
     st.warning("No ESMA data has been loaded into DuckDB yet.")
     st.markdown(
         """
-Run ingestion from the project directory:
+On Streamlit Cloud, use the **Load starter ESMA dataset** button below.
+
+For local development, run ingestion from the project directory:
 
 ```bash
 python -m src.ingest_fitrs_equities --reset
@@ -49,7 +51,7 @@ python -m src.ingest_firds --reset
 streamlit run app.py
 ```
 
-FIRDS is very large, so the default FIRDS command loads a bounded equity slice. Use
-`--limit 0` only for an intentional production-scale ingest.
+FIRDS is very large, so the app's starter loader uses a small official ESMA slice.
+Use `--limit 0` only for an intentional production-scale local ingest.
         """
     )

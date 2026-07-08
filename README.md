@@ -119,6 +119,17 @@ streamlit run app.py
 
 If no data is loaded, the app shows setup instructions instead of silently falling back to fake rows.
 
+## Streamlit Cloud First Run
+
+Streamlit Cloud does not receive your local DuckDB file. On first deploy the app may show **No ESMA data has been loaded into DuckDB yet**. Click **Load starter ESMA dataset** in the app to fetch a small official ESMA starter dataset and build `data/processed/esma_search.duckdb` inside the cloud container.
+
+The starter loader ingests:
+
+- 20,000 FITRS equity transparency rows
+- 5,000 FIRDS reference rows
+
+For larger datasets, run the ingestion commands locally or increase the limits in `app.py`.
+
 ## App Pages
 
 - **Global Search**: search ISIN, MIC, venue name, or instrument name across FITRS and FIRDS.
