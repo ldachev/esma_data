@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.streamlit/
+.venv/
+venv/
+
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep

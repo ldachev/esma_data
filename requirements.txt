@@ -1,0 +1,7 @@
+streamlit>=1.36
+pandas>=2.2
+duckdb>=1.0
+requests>=2.32
+plotly>=5.22
+lxml>=5.2
+openpyxl>=3.1
