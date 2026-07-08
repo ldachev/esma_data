@@ -64,6 +64,9 @@ def initialize_schema(conn: duckdb.DuckDBPyConnection) -> None:
             mic_key VARCHAR,
             admission_date TIMESTAMP,
             termination_date TIMESTAMP,
+            notional_currency_1 VARCHAR,
+            rca_mic VARCHAR,
+            regulated_market VARCHAR,
             country VARCHAR,
             venue_type VARCHAR,
             source_file_name VARCHAR,
@@ -73,6 +76,12 @@ def initialize_schema(conn: duckdb.DuckDBPyConnection) -> None:
         )
         """
     )
+    for statement in (
+        "ALTER TABLE firds_instruments ADD COLUMN IF NOT EXISTS notional_currency_1 VARCHAR",
+        "ALTER TABLE firds_instruments ADD COLUMN IF NOT EXISTS rca_mic VARCHAR",
+        "ALTER TABLE firds_instruments ADD COLUMN IF NOT EXISTS regulated_market VARCHAR",
+    ):
+        conn.execute(statement)
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS trading_venues (

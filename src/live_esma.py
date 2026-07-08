@@ -13,6 +13,21 @@ from .utils import normalize_upper
 
 LIVE_PAGE_SIZE = 20
 
+LIVE_FIRDS_DISPLAY_COLUMNS = {
+    "isin": "Instrument identification code",
+    "mic": "Trading venue",
+    "instrument_full_name": "Instrument Full name",
+    "classification": "Instrument classification",
+    "issuer_lei": "Issuer or operator of the trading venue identifier",
+    "admission_date": "Date of admission to trading or date of first trade",
+    "termination_date": "Termination date",
+    "notional_currency_1": "Notional currency 1",
+    "short_name": "Financial instrument short name",
+    "rca_mic": "RCA MIC",
+    "regulated_market": "Regulated market",
+    "country": "Country",
+}
+
 
 @dataclass(frozen=True)
 class LiveResult:
@@ -110,22 +125,7 @@ def live_firds_search(term: str, *, start: int = 0, rows: int = LIVE_PAGE_SIZE) 
         return empty_live_result("FIRDS", query, start, rows, str(exc))
     docs = payload.get("response", {}).get("docs", [])
     frame = map_firds_records(docs, source_file_name="live:esma_registers_firds")
-    display = frame[
-        [
-            "isin",
-            "instrument_full_name",
-            "short_name",
-            "classification",
-            "cfi_code",
-            "issuer_lei",
-            "mic",
-            "country",
-            "venue_type",
-            "admission_date",
-            "termination_date",
-            "source_record_id",
-        ]
-    ].copy()
+    display = frame[list(LIVE_FIRDS_DISPLAY_COLUMNS)].rename(columns=LIVE_FIRDS_DISPLAY_COLUMNS).copy()
     return LiveResult(display, _payload_total(payload), start, rows, query, "FIRDS")
 
 
