@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 
 from src.config import DATABASE_PATH, DEFAULT_PAGE_SIZE
-from src.database import connect, data_health, diagnostics_for_isin, lookup_values, null_rates, source_files
+from src.database import connect, data_health, diagnostics_for_isin, local_data_freshness, lookup_values, null_rates, source_files
 from src.ingest_firds import ingest_firds
 from src.ingest_fitrs_equities import ingest_fitrs_equities
 from src.instrument_profile import build_instrument_profile
@@ -47,6 +47,7 @@ from src.ui_components import (
     instrument_card,
     metric_row,
     pagination_controls,
+    provenance_line,
     setup_instructions,
 )
 from src.utils import normalize_upper
@@ -203,6 +204,7 @@ def seed_choice_state(session_key: str, param: str, *, options: list, default) -
 
 conn = db_connection()
 health = data_health(conn)
+freshness = local_data_freshness(conn)
 query_params = st.query_params
 
 if "portfolio_open_isin_request" in st.session_state:
@@ -252,6 +254,7 @@ with tabs[0]:
         with st.spinner("Querying live ESMA FITRS equities..."):
             fitrs_live = cached_live_fitrs(term, fitrs_start, LIVE_PAGE_SIZE)
         st.caption(f"ESMA query: `{fitrs_live.query}`")
+        provenance_line(mode="live", source="FITRS equities (registers.esma.europa.eu)", as_of=fitrs_live.fetched_at)
         show_live_result(fitrs_live, height=360)
         csv_download_button(
             fitrs_live.frame, label="Export this page (20 rows) as CSV", file_name="esma_fitrs_global_search.csv", key="global_fitrs_csv"
@@ -264,6 +267,7 @@ with tabs[0]:
         with st.spinner("Querying live ESMA FIRDS..."):
             firds_live = cached_live_firds(term, firds_start, LIVE_PAGE_SIZE)
         st.caption(f"ESMA query: `{firds_live.query}`")
+        provenance_line(mode="live", source="FIRDS (registers.esma.europa.eu)", as_of=firds_live.fetched_at)
         show_live_result(firds_live, height=360)
         csv_download_button(
             firds_live.frame, label="Export this page (20 rows) as CSV", file_name="esma_firds_global_search.csv", key="global_firds_csv"
@@ -311,13 +315,20 @@ with tabs[1]:
 
         st.divider()
         st.markdown("**Live FITRS records for this ISIN**")
+        provenance_line(mode="live", source="FITRS equities (registers.esma.europa.eu)", as_of=live["fitrs"].fetched_at)
         show_live_result(live["fitrs"], height=360)
         csv_download_button(live["fitrs"].frame, label="Export as CSV", file_name=f"esma_fitrs_{isin_key}.csv", key="isin_fitrs_csv")
         st.markdown("**Live FIRDS records for this ISIN**")
+        provenance_line(mode="live", source="FIRDS (registers.esma.europa.eu)", as_of=live["firds"].fetched_at)
         show_live_result(live["firds"], height=360)
         csv_download_button(live["firds"].frame, label="Export as CSV", file_name=f"esma_firds_{isin_key}.csv", key="isin_firds_csv")
         if local_loaded:
             st.markdown("**Local cache cross-check**")
+            provenance_line(
+                mode="cached",
+                source="Local DuckDB cache (FITRS + FIRDS)",
+                as_of=freshness["fitrs"] or freshness["firds"],
+            )
             venues = isin_venues(conn, isin_key)
             st.caption(
                 f"Local cache: {len(local_fitrs):,} FITRS rows, {len(local_firds):,} FIRDS rows, {len(venues):,} venues."
@@ -347,12 +358,14 @@ with tabs[2]:
         with st.spinner("Querying ESMA live for this venue/MIC..."):
             venue_live = cached_live_fitrs(venue_search_term, venue_start, LIVE_PAGE_SIZE)
         st.caption(f"ESMA query: `{venue_live.query}`")
+        provenance_line(mode="live", source="FITRS equities (registers.esma.europa.eu)", as_of=venue_live.fetched_at)
         show_live_result(venue_live, height=520)
         csv_download_button(
             venue_live.frame, label="Export this page (20 rows) as CSV", file_name="esma_venue_explorer.csv", key="venue_live_csv"
         )
     elif health["fitrs_equity_results_rows"]:
         st.markdown("**Local cached venues**")
+        provenance_line(mode="cached", source="Local DuckDB cache (trading venues)", as_of=freshness["fitrs"] or freshness["firds"])
         venues = venue_lookup(conn, "", limit=1000)
         dataframe(venues, height=420)
         csv_download_button(venues, label="Export as CSV", file_name="esma_local_venues.csv", key="venue_local_csv")
@@ -365,6 +378,7 @@ with tabs[3]:
         st.info("The screener uses local DuckDB data. Use Global Search, ISIN Explorer, or Venue Explorer for live ESMA 20-row searches without loading a local cache.")
     else:
         st.write("Filter all locally loaded FITRS equity records with paginated DuckDB queries.")
+        provenance_line(mode="cached", source="Local DuckDB cache (FITRS equities)", as_of=freshness["fitrs"])
         with st.sidebar:
             st.header("Screener Filters")
             seed_text_state("screen_search", "scr_search")
@@ -571,6 +585,14 @@ with tabs[4]:
         with st.spinner(f"Enriching {len(watchlist)} portfolio ISIN(s)..."):
             profiles = [cached_isin_profile(item, use_local) for item in watchlist]
         profile_df = pd.DataFrame(profiles)
+        if use_local:
+            provenance_line(
+                mode="cached",
+                source="Live ESMA queries, cross-checked against local DuckDB cache",
+                as_of=freshness["fitrs"] or freshness["firds"],
+            )
+        else:
+            provenance_line(mode="live", source="Live ESMA queries (no local cache loaded)", as_of="just now (cached up to 2 min)")
 
         liquidity_categories = [classify_liquidity(p.get("Liquidity flag")) for p in profiles]
         liquid_count = liquidity_categories.count("liquid")
@@ -654,6 +676,12 @@ with tabs[5]:
     if not health["fitrs_equity_results_rows"] and not health["firds_instruments_rows"]:
         st.info("No local DuckDB cache is loaded. The search pages still query ESMA live in 20-row pages.")
     else:
+        metric_row(
+            {
+                "FITRS last ingested": freshness["fitrs"] or "N/A",
+                "FIRDS last ingested": freshness["firds"] or "N/A",
+            }
+        )
         st.markdown("**Source files / batches ingested**")
         dataframe(source_files(conn), height=300)
         st.markdown("**Missing/null rates for important fields**")

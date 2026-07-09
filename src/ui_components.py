@@ -37,6 +37,14 @@ def empty_state(message: str) -> None:
     st.info(message)
 
 
+def provenance_line(*, mode: str, source: str, as_of: object) -> None:
+    """Show a live-vs-cached badge plus source register and 'as of' freshness."""
+
+    label = "LIVE" if mode == "live" else "CACHED"
+    as_of_text = str(as_of) if as_of else "unknown"
+    st.caption(f"`{label}` · source: {source} · as of: {as_of_text}")
+
+
 def csv_download_button(df: pd.DataFrame, *, label: str, file_name: str, key: str | None = None) -> None:
     st.download_button(
         label,

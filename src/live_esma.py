@@ -8,7 +8,7 @@ import pandas as pd
 
 from .esma_sources import FIRDS, FITRS_EQUITIES, fetch_solr_facet, fetch_solr_page
 from .schema_mapper import map_firds_records, map_fitrs_records
-from .utils import normalize_upper
+from .utils import normalize_upper, utc_now_iso
 
 
 LIVE_PAGE_SIZE = 20
@@ -52,6 +52,7 @@ class LiveResult:
     source: str
     error: str | None = None
     canonical: pd.DataFrame = field(default_factory=pd.DataFrame)
+    fetched_at: str = ""
 
     @property
     def next_start(self) -> int | None:
@@ -98,7 +99,7 @@ def build_firds_query(term: str) -> str:
 
 
 def empty_live_result(source: str, query: str, start: int, rows: int, error: str) -> LiveResult:
-    return LiveResult(pd.DataFrame(), 0, start, rows, query, source, error)
+    return LiveResult(pd.DataFrame(), 0, start, rows, query, source, error, fetched_at=utc_now_iso())
 
 
 def _payload_total(payload: dict) -> int:
@@ -114,7 +115,9 @@ def live_fitrs_search(term: str, *, start: int = 0, rows: int = LIVE_PAGE_SIZE) 
     docs = payload.get("response", {}).get("docs", [])
     frame = map_fitrs_records(docs, source_file_name="live:esma_registers_fitrs_equities")
     display = frame[list(LIVE_FITRS_DISPLAY_COLUMNS)].rename(columns=LIVE_FITRS_DISPLAY_COLUMNS).copy()
-    return LiveResult(display, _payload_total(payload), start, rows, query, "FITRS equities", canonical=frame)
+    return LiveResult(
+        display, _payload_total(payload), start, rows, query, "FITRS equities", canonical=frame, fetched_at=utc_now_iso()
+    )
 
 
 def live_firds_search(term: str, *, start: int = 0, rows: int = LIVE_PAGE_SIZE) -> LiveResult:
@@ -126,7 +129,9 @@ def live_firds_search(term: str, *, start: int = 0, rows: int = LIVE_PAGE_SIZE) 
     docs = payload.get("response", {}).get("docs", [])
     frame = map_firds_records(docs, source_file_name="live:esma_registers_firds")
     display = frame[list(LIVE_FIRDS_DISPLAY_COLUMNS)].rename(columns=LIVE_FIRDS_DISPLAY_COLUMNS).copy()
-    return LiveResult(display, _payload_total(payload), start, rows, query, "FIRDS", canonical=frame)
+    return LiveResult(
+        display, _payload_total(payload), start, rows, query, "FIRDS", canonical=frame, fetched_at=utc_now_iso()
+    )
 
 
 def live_isin_bundle(isin: str, *, rows: int = LIVE_PAGE_SIZE) -> dict[str, LiveResult]:

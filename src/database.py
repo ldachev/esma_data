@@ -232,6 +232,15 @@ def data_health(conn: duckdb.DuckDBPyConnection) -> dict[str, Any]:
     return result
 
 
+def local_data_freshness(conn: duckdb.DuckDBPyConnection) -> dict[str, Any]:
+    """Most recent ingestion timestamp per local table, for provenance/freshness badges."""
+
+    return {
+        "fitrs": conn.execute("SELECT MAX(ingestion_timestamp) FROM fitrs_equity_results").fetchone()[0],
+        "firds": conn.execute("SELECT MAX(ingestion_timestamp) FROM firds_instruments").fetchone()[0],
+    }
+
+
 def source_files(conn: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     return query_df(
         conn,
