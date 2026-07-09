@@ -6,7 +6,15 @@ import pandas as pd
 import streamlit as st
 
 from src.config import DATABASE_PATH, DEFAULT_PAGE_SIZE
-from src.database import connect, data_health, diagnostics_for_isin, local_data_freshness, lookup_values, null_rates, source_files
+from src.database import connect, data_health, diagnostics_for_isin, lookup_values, null_rates, source_files
+try:
+    from src.database import local_data_freshness
+except ImportError:
+    # Streamlit Cloud can briefly run mixed deployment caches during a redeploy.
+    # Keep the app open and mark freshness as unknown instead of failing import.
+    def local_data_freshness(conn):
+        return {"fitrs": None, "firds": None}
+
 from src.ingest_firds import ingest_firds
 from src.ingest_fitrs_equities import ingest_fitrs_equities
 from src.instrument_profile import build_instrument_profile
