@@ -34,6 +34,9 @@ def initialize_schema(conn: duckdb.DuckDBPyConnection) -> None:
             liquidity_status VARCHAR,
             avg_daily_turnover DOUBLE,
             avg_daily_transactions DOUBLE,
+            lis_threshold DOUBLE,
+            avt_currency VARCHAR,
+            adnte_on_mrmtl DOUBLE,
             mifir_identifier VARCHAR,
             cfi_code VARCHAR,
             instrument_type VARCHAR,
@@ -49,6 +52,12 @@ def initialize_schema(conn: duckdb.DuckDBPyConnection) -> None:
         )
         """
     )
+    for statement in (
+        "ALTER TABLE fitrs_equity_results ADD COLUMN IF NOT EXISTS lis_threshold DOUBLE",
+        "ALTER TABLE fitrs_equity_results ADD COLUMN IF NOT EXISTS avt_currency VARCHAR",
+        "ALTER TABLE fitrs_equity_results ADD COLUMN IF NOT EXISTS adnte_on_mrmtl DOUBLE",
+    ):
+        conn.execute(statement)
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS firds_instruments (

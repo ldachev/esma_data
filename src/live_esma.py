@@ -28,6 +28,19 @@ LIVE_FIRDS_DISPLAY_COLUMNS = {
     "country": "Country",
 }
 
+LIVE_FITRS_DISPLAY_COLUMNS = {
+    "isin": "ISIN",
+    "methodology": "Methodology",
+    "calculation_period_from": "Calculation From Date",
+    "calculation_period_to": "Calculation To Date",
+    "liquidity_status": "Liquidity Flag",
+    "lis_threshold": "LIS Threshold",
+    "avt_currency": "AVT Currency",
+    "mic": "MRMTL",
+    "adnte_on_mrmtl": "ADNTE on MRMTL",
+    "mifir_identifier": "Mifir Identifier",
+}
+
 
 @dataclass(frozen=True)
 class LiveResult:
@@ -99,21 +112,7 @@ def live_fitrs_search(term: str, *, start: int = 0, rows: int = LIVE_PAGE_SIZE) 
         return empty_live_result("FITRS equities", query, start, rows, str(exc))
     docs = payload.get("response", {}).get("docs", [])
     frame = map_fitrs_records(docs, source_file_name="live:esma_registers_fitrs_equities")
-    display = frame[
-        [
-            "isin",
-            "mic",
-            "liquidity_status",
-            "avg_daily_turnover",
-            "avg_daily_transactions",
-            "mifir_identifier",
-            "cfi_code",
-            "instrument_type",
-            "calculation_date",
-            "reference_period",
-            "source_record_id",
-        ]
-    ].copy()
+    display = frame[list(LIVE_FITRS_DISPLAY_COLUMNS)].rename(columns=LIVE_FITRS_DISPLAY_COLUMNS).copy()
     return LiveResult(display, _payload_total(payload), start, rows, query, "FITRS equities")
 
 
