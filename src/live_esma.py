@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pandas as pd
 
@@ -51,6 +51,7 @@ class LiveResult:
     query: str
     source: str
     error: str | None = None
+    canonical: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     @property
     def next_start(self) -> int | None:
@@ -113,7 +114,7 @@ def live_fitrs_search(term: str, *, start: int = 0, rows: int = LIVE_PAGE_SIZE) 
     docs = payload.get("response", {}).get("docs", [])
     frame = map_fitrs_records(docs, source_file_name="live:esma_registers_fitrs_equities")
     display = frame[list(LIVE_FITRS_DISPLAY_COLUMNS)].rename(columns=LIVE_FITRS_DISPLAY_COLUMNS).copy()
-    return LiveResult(display, _payload_total(payload), start, rows, query, "FITRS equities")
+    return LiveResult(display, _payload_total(payload), start, rows, query, "FITRS equities", canonical=frame)
 
 
 def live_firds_search(term: str, *, start: int = 0, rows: int = LIVE_PAGE_SIZE) -> LiveResult:
@@ -125,7 +126,7 @@ def live_firds_search(term: str, *, start: int = 0, rows: int = LIVE_PAGE_SIZE) 
     docs = payload.get("response", {}).get("docs", [])
     frame = map_firds_records(docs, source_file_name="live:esma_registers_firds")
     display = frame[list(LIVE_FIRDS_DISPLAY_COLUMNS)].rename(columns=LIVE_FIRDS_DISPLAY_COLUMNS).copy()
-    return LiveResult(display, _payload_total(payload), start, rows, query, "FIRDS")
+    return LiveResult(display, _payload_total(payload), start, rows, query, "FIRDS", canonical=frame)
 
 
 def live_isin_bundle(isin: str, *, rows: int = LIVE_PAGE_SIZE) -> dict[str, LiveResult]:

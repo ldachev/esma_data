@@ -37,6 +37,77 @@ def empty_state(message: str) -> None:
     st.info(message)
 
 
+def _fmt_number(value: object) -> str:
+    if value is None:
+        return "N/A"
+    try:
+        return f"{float(value):,.2f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def instrument_card(
+    profile: dict[str, object],
+    *,
+    notices: list[tuple[str, str]],
+    liquidity_text: str,
+    period_text: str,
+    cfi_text: str,
+) -> None:
+    """Render a synthesized single-instrument summary card.
+
+    ``profile`` is the dict from ``InstrumentProfile.to_dict()``. ``notices``
+    is a list of ``(level, message)`` tuples from reconciliation.
+    """
+
+    name = profile.get("Instrument name") or profile.get("ISIN")
+    name_source = profile.get("Instrument name source")
+    title = f"{name}" + (f" ({name_source})" if name_source else "")
+    st.markdown(f"### {title}")
+    st.caption(f"ISIN: {profile.get('ISIN')}")
+
+    metric_row(
+        {
+            "Liquidity flag": profile.get("Liquidity flag") or "N/A",
+            "Avg. daily turnover": _fmt_number(profile.get("Average daily turnover")),
+            "Avg. daily transactions": _fmt_number(profile.get("Average daily number of transactions")),
+            "Calculation date": profile.get("Calculation date") or "N/A",
+        }
+    )
+
+    left, right = st.columns(2)
+    with left:
+        st.markdown(f"**Issuer LEI:** {profile.get('Issuer LEI') or 'N/A'}")
+        st.markdown(
+            f"**CFI code:** {profile.get('CFI code') or 'N/A'}"
+            + (f" (source: {profile.get('CFI source')})" if profile.get("CFI source") else "")
+        )
+        st.markdown(
+            f"**Home/most relevant MIC:** {profile.get('Home/most relevant MIC') or 'N/A'}"
+            + (f" (source: {profile.get('MIC source')})" if profile.get("MIC source") else "")
+        )
+        st.markdown(f"**MiFIR identifier:** {profile.get('MiFIR identifier') or 'N/A'}")
+    with right:
+        st.markdown(f"**Reference period:** {profile.get('Reference period') or 'N/A'}")
+        st.markdown(f"**Admission date:** {profile.get('Admission date') or 'N/A'}")
+        st.markdown(f"**Termination date:** {profile.get('Termination date') or 'N/A'}")
+        st.markdown(
+            f"**Registers matched:** FITRS {'yes' if profile.get('In FITRS') else 'no'} / "
+            f"FIRDS {'yes' if profile.get('In FIRDS') else 'no'}"
+        )
+
+    for level, message in notices:
+        if level == "conflict":
+            st.warning(message)
+        else:
+            st.info(message)
+
+    with st.expander("What do these fields mean? (MiFID II interpretation)"):
+        st.markdown(f"**Liquidity flag:** {liquidity_text}")
+        st.markdown(f"**Reference/calculation period:** {period_text}")
+        st.markdown(f"**CFI code:** {cfi_text}")
+
+
 def setup_instructions() -> None:
     st.warning("No ESMA data has been loaded into DuckDB yet.")
     st.markdown(

@@ -7,6 +7,8 @@ from src.config import DATABASE_PATH, DEFAULT_PAGE_SIZE
 from src.database import connect, data_health, diagnostics_for_isin, lookup_values, null_rates, source_files
 from src.ingest_firds import ingest_firds
 from src.ingest_fitrs_equities import ingest_fitrs_equities
+from src.instrument_profile import build_instrument_profile
+from src.interpretations import decode_cfi, interpret_liquidity, interpret_reference_period
 from src.live_esma import LIVE_PAGE_SIZE, live_firds_search, live_fitrs_search, live_isin_bundle
 from src.search_index import (
     export_liquidity_screener,
@@ -18,7 +20,7 @@ from src.search_index import (
     venue_instruments,
     venue_lookup,
 )
-from src.ui_components import dataframe, empty_state, metric_row, pagination_controls, setup_instructions
+from src.ui_components import dataframe, empty_state, instrument_card, metric_row, pagination_controls, setup_instructions
 from src.utils import normalize_upper
 
 
@@ -182,16 +184,43 @@ with tabs[1]:
                 "Live FIRDS matches": f"{live['firds'].total:,}",
             }
         )
+
+        fitrs_records = live["fitrs"].canonical.to_dict("records") if not live["fitrs"].canonical.empty else []
+        firds_records = live["firds"].canonical.to_dict("records") if not live["firds"].canonical.empty else []
+        local_loaded = bool(health["fitrs_equity_results_rows"] or health["firds_instruments_rows"])
+        local_fitrs = local_firds = None
+        if local_loaded:
+            local_fitrs = isin_fitrs(conn, isin_key)
+            local_firds = isin_firds(conn, isin_key)
+            fitrs_records += local_fitrs.to_dict("records")
+            firds_records += local_firds.to_dict("records")
+
+        profile = build_instrument_profile(isin_key, fitrs_records, firds_records)
+        cfi_decoding = decode_cfi(profile.cfi_code)
+        st.markdown("#### Instrument card")
+        instrument_card(
+            profile.to_dict(),
+            notices=[(n.level, n.message) for n in profile.notices],
+            liquidity_text=interpret_liquidity(profile.liquidity_status),
+            period_text=interpret_reference_period(profile.reference_period),
+            cfi_text=cfi_decoding.description,
+        )
+
+        st.divider()
         st.markdown("**Live FITRS records for this ISIN**")
         show_live_result(live["fitrs"], height=360)
         st.markdown("**Live FIRDS records for this ISIN**")
         show_live_result(live["firds"], height=360)
-        if health["fitrs_equity_results_rows"] or health["firds_instruments_rows"]:
+        if local_loaded:
             st.markdown("**Local cache cross-check**")
-            fitrs = isin_fitrs(conn, isin_key)
-            firds = isin_firds(conn, isin_key)
             venues = isin_venues(conn, isin_key)
-            st.caption(f"Local cache: {len(fitrs):,} FITRS rows, {len(firds):,} FIRDS rows, {len(venues):,} venues.")
+            st.caption(
+                f"Local cache: {len(local_fitrs):,} FITRS rows, {len(local_firds):,} FIRDS rows, {len(venues):,} venues."
+            )
+            if not local_fitrs.empty:
+                dataframe(local_fitrs, height=240)
+            if not local_firds.empty:
+                dataframe(local_firds, height=240)
 
 with tabs[2]:
     st.subheader("Venue Explorer")
