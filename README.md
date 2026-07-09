@@ -63,6 +63,10 @@ Some ISINs can appear in FITRS but not in the loaded FIRDS slice, and vice versa
 │   ├── schema_mapper.py
 │   ├── search_index.py
 │   ├── database.py
+│   ├── live_esma.py
+│   ├── instrument_profile.py
+│   ├── interpretations.py
+│   ├── portfolio.py
 │   ├── ui_components.py
 │   └── utils.py
 ├── data/
@@ -73,6 +77,18 @@ Some ISINs can appear in FITRS but not in the loaded FIRDS slice, and vice versa
 ├── requirements.txt
 └── README.md
 ```
+
+- `src/instrument_profile.py` — pure logic that merges FITRS + FIRDS records for one ISIN into a
+  single `InstrumentProfile`, with explicit gap/conflict reconciliation notices when a register is
+  missing or the two registers disagree (e.g. different CFI code or most-relevant MIC).
+- `src/interpretations.py` — plain-language MiFID II context for raw field values: what the
+  liquidity flag means for transparency obligations, what the reference/calculation period covers,
+  and a curated ISO 10962 CFI code decoder. Kept separate from UI code so the mapping is easy to
+  review and extend.
+- `src/portfolio.py` — ISIN watchlist logic: ISO 6166 format + Luhn check-digit validation,
+  bulk-paste parsing, JSON/CSV import/export, and an `InMemoryPortfolioStore` that wraps a mutable
+  mapping (the app uses `st.session_state`) behind a `load`/`save`/`add`/`remove` interface, so a
+  real per-user database backend could be swapped in later without touching the UI.
 
 ## Install
 
@@ -135,10 +151,71 @@ The local DuckDB ingestion commands are still available for heavier local analyt
 ## App Pages
 
 - **Global Search**: live search ISIN/MIC fields against FITRS and FIRDS, 20 ESMA rows at a time.
-- **ISIN Explorer**: enter an ISIN and inspect live FITRS and FIRDS records.
-- **Venue Explorer**: search a MIC such as `XATH` and page through live ESMA FITRS results 20 rows at a time.
-- **Liquidity Screener**: filter by liquidity status, MIC, country, instrument type, calculation date, reference period, turnover, and transaction count when a local DuckDB cache is loaded.
-- **Data Health**: inspect row counts, distinct ISINs/MICs, latest calculation date, source batches, and null rates.
+  Above the pager, a total-match count and liquidity/venue distribution charts summarize the *full*
+  live result set (via ESMA Solr faceting), not just the visible page. Each result block has a CSV
+  export and a live/cached provenance badge with an "as of" timestamp.
+- **ISIN Explorer**: enter an ISIN and see a synthesized **instrument card** above the existing raw
+  FITRS/FIRDS tables (which are unchanged). The card reconciles both registers — preferring the
+  FIRDS name/CFI code and the FITRS most-relevant-market MIC — and surfaces explicit reconciliation
+  notices when a register has no match or the two registers disagree. An expander decodes the
+  liquidity flag, reference period, and CFI code into plain-language MiFID II context. Works from
+  live data alone and cross-checks the local cache when one is loaded. Raw tables and local
+  cross-check rows each have CSV export.
+- **Venue Explorer**: search a MIC such as `XATH` and page through live ESMA FITRS results 20 rows
+  at a time, with a total-match count, a liquidity split chart over the full result set, and CSV
+  export.
+- **Liquidity Screener**: filter by liquidity status, MIC, country, instrument type, calculation
+  date, reference period, turnover, and transaction count when a local DuckDB cache is loaded. A
+  "full result set overview" above the page grid shows totals plus charts for liquid/non-liquid
+  split, turnover distribution, venue/country breakdown, and calculation-date coverage by month —
+  computed via SQL aggregates over all matching rows, not just the current page. Export as CSV or
+  Excel.
+- **Portfolio**: save ISINs to a watchlist (single entry or bulk paste, both ISO 6166
+  format/check-digit validated), persisted in the browser session and importable/exportable as
+  JSON or CSV so a list can be saved and reloaded. Each saved ISIN is enriched with the same
+  instrument-profile logic as the ISIN Explorer (name, venue, liquidity, turnover, transactions,
+  calculation date), with a portfolio-level summary (liquid/non-liquid split, venue breakdown,
+  mean turnover) and CSV/Excel export of the enriched table. Row actions let you open an ISIN in
+  the ISIN Explorer or remove it from the list.
+- **Data Health**: inspect row counts, distinct ISINs/MICs, latest calculation date, per-table last
+  ingestion timestamp, source batches, and null rates.
+
+## Instrument Card & Interpretation Layer
+
+The ISIN Explorer's instrument card (`src/instrument_profile.py` + `src/interpretations.py`) is the
+one place in the app that answers "what is this instrument and is it liquid, in plain terms?"
+without you having to cross-reference two raw registers by hand. It never drops or hides unmatched
+data: if FITRS has no calculation for the ISIN, or FIRDS has no reference row, or the two registers
+disagree on CFI code or MIC, that is shown as an explicit notice rather than silently picking one
+side.
+
+## Portfolio Tracker
+
+The Portfolio tab is a lightweight watchlist, not a brokerage account: it stores a list of ISINs in
+`st.session_state` for the current browser session, with JSON/CSV import/export so you can save and
+reload a list across sessions (Streamlit Cloud has no per-user database). The storage layer
+(`src/portfolio.py`) is written behind a small `load`/`save`/`add`/`remove` interface so a real
+per-user backend could replace `InMemoryPortfolioStore` later without changing the Portfolio tab UI.
+Bulk enrichment of many ISINs reuses the same `@st.cache_data`-wrapped live lookup as the ISIN
+Explorer, so adding 50 ISINs only fires uncached live ESMA calls once per ISIN per cache window
+(120s), not on every rerun.
+
+## Shareable Links
+
+Global Search term, ISIN Explorer ISIN, Venue Explorer MIC, and Liquidity Screener filters
+(search/liquidity/MIC/country/instrument type/reference period/sort) are synced to the URL via
+`st.query_params`, so a specific view can be bookmarked or shared and is restored on load. Visiting
+the app with no query params behaves exactly as before. Streamlit does not support switching the
+active tab programmatically, so a deep link restores the *state* of a tab; you still click the tab
+to view it.
+
+## Provenance & Freshness
+
+Every result view — Global Search, ISIN Explorer, Venue Explorer, Liquidity Screener, and
+Portfolio, not just Data Health — shows a `LIVE` or `CACHED` badge alongside the source register
+and an "as of" timestamp. For live results this is the time of the actual ESMA request (accurate
+under the existing cache TTLs); for local-cache results it is the most recent ingestion timestamp
+for that table, also now surfaced as explicit metrics on the Data Health tab.
 
 ## Searching
 
@@ -182,6 +259,18 @@ Tests cover:
 - liquidity sorting
 - FITRS/FIRDS joins without dropping unmatched records
 - operation when only FITRS or only FIRDS is loaded
+- full-result-set screener aggregates (`screener_summary`)
+- Solr facet-pair parsing (`parse_facet_pairs`)
+- instrument profile merge/reconcile logic, including gap and conflict notices
+- MiFID II interpretation text (liquidity flag, reference period, CFI decoding)
+- ISIN format/check-digit validation, bulk parsing, and portfolio JSON/CSV import-export
+
+## Dependencies
+
+No new third-party dependencies were added for this work; `requirements.txt` is unchanged. Excel
+export (Liquidity Screener, Portfolio) uses `openpyxl`, which was already a dependency. Live
+aggregate summaries use the ESMA Solr endpoints' existing faceting support via plain HTTP
+(`requests`, already a dependency) — no new client library required.
 
 ## Known Limitations
 
@@ -189,6 +278,15 @@ Tests cover:
 - Some FITRS rows do not include an instrument name; FIRDS enrichment depends on matching loaded reference rows.
 - MIC country and venue type fields are only as complete as the loaded FIRDS/venue metadata.
 - ESMA schemas and field names vary across endpoints and publication formats; `src/schema_mapper.py` handles common aliases but may need extension for new file schemas.
+- The CFI code decoder in `src/interpretations.py` covers a curated subset of ISO 10962
+  category/group letters (enough for the equity/CIV instruments this app deals with); codes outside
+  that subset are labeled as unrecognized rather than guessed.
+- Screener deep links cover the categorical filters and sort order; the minimum turnover/transaction
+  thresholds and the calculation-date range are not synced to the URL.
+- Streamlit cannot switch the active tab programmatically, so opening a deep link or an "Open in
+  ISIN Explorer" portfolio action preloads that tab's state, but you still click the tab to view it.
+- The Portfolio watchlist lives in `st.session_state` for the current browser session only; use the
+  JSON/CSV export to persist it across sessions or share it.
 
 ## GitHub Pages
 
