@@ -177,11 +177,40 @@ def show_live_result(result, *, height: int = 360) -> None:
         dataframe(result.frame, height=height)
 
 
+def set_query_param(param: str, value: str | None) -> None:
+    """Write (or clear) a URL query param so the current view is bookmarkable/shareable."""
+
+    if value:
+        st.query_params[param] = value
+    elif param in st.query_params:
+        del st.query_params[param]
+
+
+def seed_text_state(session_key: str, param: str) -> None:
+    """Seed a text widget's session_state from a URL query param, but only before it exists
+    (i.e. on first load of this browser session) so later user edits always win."""
+
+    if session_key not in st.session_state and param in query_params:
+        st.session_state[session_key] = query_params[param]
+
+
+def seed_choice_state(session_key: str, param: str, *, options: list, default) -> None:
+    if session_key in st.session_state:
+        return
+    value = query_params.get(param)
+    st.session_state[session_key] = value if value in options else default
+
+
 conn = db_connection()
 health = data_health(conn)
+query_params = st.query_params
 
 if "portfolio_open_isin_request" in st.session_state:
     st.session_state["isin_explorer"] = st.session_state.pop("portfolio_open_isin_request")
+else:
+    seed_text_state("isin_explorer", "isin")
+seed_text_state("venue_search", "mic")
+seed_text_state("global_search_term", "q")
 
 st.title("ESMA Equity Transparency and FIRDS Search")
 st.caption(
@@ -204,7 +233,10 @@ tabs = st.tabs(["Global Search", "ISIN Explorer", "Venue Explorer", "Liquidity S
 with tabs[0]:
     st.subheader("Global Search")
     st.write("Search live ESMA FITRS equities and FIRDS. Results are fetched 20 rows at a time from ESMA.")
-    term = st.text_input("Search term", placeholder="Example: XATH, NL0010273215, Allianz, Euronext")
+    term = st.text_input(
+        "Search term", placeholder="Example: XATH, NL0010273215, Allianz, Euronext", key="global_search_term"
+    )
+    set_query_param("q", term)
     if term:
         fitrs_total = cached_live_fitrs(term, 0, LIVE_PAGE_SIZE).total
         st.markdown("**Live FITRS equity transparency results**")
@@ -244,6 +276,7 @@ with tabs[0]:
 with tabs[1]:
     st.subheader("ISIN Explorer")
     isin = st.text_input("Enter ISIN", placeholder="Example: GRS014003032", key="isin_explorer").strip()
+    set_query_param("isin", isin)
     if isin:
         isin_key = normalize_upper(isin)
         with st.spinner("Querying ESMA live for this ISIN..."):
@@ -304,6 +337,7 @@ with tabs[2]:
     st.subheader("Venue Explorer")
     st.write("Search a MIC live in ESMA FITRS. Results are returned 20 rows at a time.")
     venue_search_term = st.text_input("Search MIC or venue name", placeholder="Example: XATH", key="venue_search")
+    set_query_param("mic", venue_search_term)
     if venue_search_term:
         venue_total = cached_live_fitrs(venue_search_term, 0, LIVE_PAGE_SIZE).total
         metric_row({"Total matches": f"{venue_total:,}"})
@@ -333,24 +367,49 @@ with tabs[3]:
         st.write("Filter all locally loaded FITRS equity records with paginated DuckDB queries.")
         with st.sidebar:
             st.header("Screener Filters")
+            seed_text_state("screen_search", "scr_search")
             search = st.text_input("ISIN, MIC, or name contains", key="screen_search")
-            liquidity = st.selectbox("Liquidity status", [""] + cached_lookup("liquidity"))
-            mic = st.selectbox("MIC", [""] + cached_lookup("mic"))
-            country = st.selectbox("Country", [""] + cached_lookup("country"))
-            instrument_type = st.selectbox("Instrument type", [""] + cached_lookup("instrument_type"))
-            reference_period = st.selectbox("Reference period", [""] + cached_lookup("reference_period"))
+
+            liquidity_options = [""] + cached_lookup("liquidity")
+            seed_choice_state("screen_liquidity", "scr_liquidity", options=liquidity_options, default="")
+            liquidity = st.selectbox("Liquidity status", liquidity_options, key="screen_liquidity")
+
+            mic_options = [""] + cached_lookup("mic")
+            seed_choice_state("screen_mic", "scr_mic", options=mic_options, default="")
+            mic = st.selectbox("MIC", mic_options, key="screen_mic")
+
+            country_options = [""] + cached_lookup("country")
+            seed_choice_state("screen_country", "scr_country", options=country_options, default="")
+            country = st.selectbox("Country", country_options, key="screen_country")
+
+            type_options = [""] + cached_lookup("instrument_type")
+            seed_choice_state("screen_type", "scr_type", options=type_options, default="")
+            instrument_type = st.selectbox("Instrument type", type_options, key="screen_type")
+
+            period_options = [""] + cached_lookup("reference_period")
+            seed_choice_state("screen_period", "scr_period", options=period_options, default="")
+            reference_period = st.selectbox("Reference period", period_options, key="screen_period")
+
             min_turnover = st.number_input("Minimum average daily turnover", min_value=0.0, value=0.0, step=1000.0)
             min_transactions = st.number_input("Minimum average daily transactions", min_value=0.0, value=0.0, step=1.0)
             date_range = st.date_input("Calculation date range", value=())
         sort_col, dir_col, size_col = st.columns(3)
+        sort_options = [
+            "avg_daily_turnover",
+            "avg_daily_transactions",
+            "calculation_date",
+            "instrument_name",
+            "isin",
+            "mic",
+            "liquidity_status",
+        ]
         with sort_col:
-            sort_by = st.selectbox(
-                "Sort by",
-                ["avg_daily_turnover", "avg_daily_transactions", "calculation_date", "instrument_name", "isin", "mic", "liquidity_status"],
-                index=0,
-            )
+            seed_choice_state("screen_sort_by", "scr_sort", options=sort_options, default="avg_daily_turnover")
+            sort_by = st.selectbox("Sort by", sort_options, key="screen_sort_by")
         with dir_col:
-            sort_desc = st.checkbox("Descending", value=True, key="screen_sort_desc")
+            if "screen_sort_desc" not in st.session_state:
+                st.session_state["screen_sort_desc"] = query_params.get("scr_desc", "true") != "false"
+            sort_desc = st.checkbox("Descending", key="screen_sort_desc")
         with size_col:
             page_size = st.selectbox("Rows per page", [50, 100, 250, 500, 1000], index=1, key="screen_page_size")
 
@@ -371,6 +430,14 @@ with tabs[3]:
             "sort_by": sort_by,
             "sort_desc": sort_desc,
         }
+        set_query_param("scr_search", search)
+        set_query_param("scr_liquidity", liquidity)
+        set_query_param("scr_mic", mic)
+        set_query_param("scr_country", country)
+        set_query_param("scr_type", instrument_type)
+        set_query_param("scr_period", reference_period)
+        set_query_param("scr_sort", sort_by)
+        set_query_param("scr_desc", "true" if sort_desc else "false")
         summary = screener_summary(conn, filters)
         total = summary["total"]
 
