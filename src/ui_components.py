@@ -37,6 +37,27 @@ def empty_state(message: str) -> None:
     st.info(message)
 
 
+def csv_download_button(df: pd.DataFrame, *, label: str, file_name: str, key: str | None = None) -> None:
+    st.download_button(
+        label,
+        data=df.to_csv(index=False).encode("utf-8"),
+        file_name=file_name,
+        mime="text/csv",
+        disabled=df.empty,
+        key=key,
+    )
+
+
+def facet_bar_chart(pairs: list[tuple[str, int]], *, label: str) -> None:
+    """Render a bar chart from (value, count) pairs covering the full result set."""
+
+    if not pairs:
+        st.caption(f"No {label} breakdown available for the full result set.")
+        return
+    series = pd.Series({k: v for k, v in pairs}, name="count")
+    st.bar_chart(series)
+
+
 def _fmt_number(value: object) -> str:
     if value is None:
         return "N/A"

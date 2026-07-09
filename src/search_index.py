@@ -265,7 +265,7 @@ def venue_instruments(
     return df, total
 
 
-def liquidity_screener(conn, filters: dict[str, Any], *, limit: int = 100, offset: int = 0) -> tuple[pd.DataFrame, int]:
+def _screener_base(filters: dict[str, Any]) -> tuple[str, list[Any]]:
     where: list[str] = []
     params: list[Any] = []
     if filters.get("liquidity_status"):
@@ -311,6 +311,11 @@ def liquidity_screener(conn, filters: dict[str, Any], *, limit: int = 100, offse
         ) fd ON fd.isin_key = f.isin_key AND fd.mic_key = f.mic_key
         {where_sql}
     """
+    return base, params
+
+
+def liquidity_screener(conn, filters: dict[str, Any], *, limit: int = 100, offset: int = 0) -> tuple[pd.DataFrame, int]:
+    base, params = _screener_base(filters)
     sort_by = filters.get("sort_by") or "avg_daily_turnover"
     sort_desc = bool(filters.get("sort_desc", True))
     order = _order(sort_by, sort_desc, FITRS_SORT_COLUMNS, "avg_daily_turnover")
@@ -344,3 +349,74 @@ def liquidity_screener(conn, filters: dict[str, Any], *, limit: int = 100, offse
 def export_liquidity_screener(conn, filters: dict[str, Any], *, max_rows: int = 100_000) -> pd.DataFrame:
     df, _total = liquidity_screener(conn, filters, limit=max_rows, offset=0)
     return df
+
+
+def screener_summary(conn, filters: dict[str, Any]) -> dict[str, Any]:
+    """Aggregate stats over the *full* filtered result set (not just one page)."""
+
+    base, params = _screener_base(filters)
+    total = count_query(conn, f"SELECT COUNT(*) {base}", params)
+    turnover_row = conn.execute(
+        f"SELECT SUM(f.avg_daily_turnover), AVG(f.avg_daily_turnover) {base}", params
+    ).fetchone()
+    liquidity_breakdown = query_df(
+        conn,
+        f"SELECT f.liquidity_status AS liquidity_status, COUNT(*) AS count {base} GROUP BY f.liquidity_status ORDER BY count DESC",
+        params,
+    )
+    venue_breakdown = query_df(
+        conn,
+        f"SELECT f.mic AS mic, COUNT(*) AS count {base} GROUP BY f.mic ORDER BY count DESC LIMIT 15",
+        params,
+    )
+    country_breakdown = query_df(
+        conn,
+        f"SELECT COALESCE(NULLIF(fd.country, ''), 'Unknown') AS country, COUNT(*) AS count {base} GROUP BY 1 ORDER BY count DESC LIMIT 15",
+        params,
+    )
+    date_coverage = query_df(
+        conn,
+        f"""
+        SELECT
+            COALESCE(strftime(f.calculation_date, '%Y-%m'), 'Unknown') AS period,
+            COUNT(*) AS count
+        {base}
+        GROUP BY 1
+        ORDER BY 1
+        """,
+        params,
+    )
+    turnover_buckets = query_df(
+        conn,
+        f"""
+        SELECT
+            CASE
+                WHEN f.avg_daily_turnover IS NULL THEN 'Unknown'
+                WHEN f.avg_daily_turnover < 10000 THEN '< 10K'
+                WHEN f.avg_daily_turnover < 100000 THEN '10K-100K'
+                WHEN f.avg_daily_turnover < 1000000 THEN '100K-1M'
+                WHEN f.avg_daily_turnover < 10000000 THEN '1M-10M'
+                ELSE '10M+'
+            END AS bucket,
+            COUNT(*) AS count
+        {base}
+        GROUP BY 1
+        """,
+        params,
+    )
+    bucket_order = ["Unknown", "< 10K", "10K-100K", "100K-1M", "1M-10M", "10M+"]
+    turnover_buckets["order"] = turnover_buckets["bucket"].apply(
+        lambda b: bucket_order.index(b) if b in bucket_order else len(bucket_order)
+    )
+    turnover_buckets = turnover_buckets.sort_values("order").drop(columns="order")
+
+    return {
+        "total": total,
+        "sum_turnover": turnover_row[0],
+        "mean_turnover": turnover_row[1],
+        "liquidity_breakdown": liquidity_breakdown,
+        "venue_breakdown": venue_breakdown,
+        "country_breakdown": country_breakdown,
+        "date_coverage": date_coverage,
+        "turnover_buckets": turnover_buckets,
+    }

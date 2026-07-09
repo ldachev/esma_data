@@ -50,7 +50,15 @@ FIRDS = EsmaSource(
 )
 
 
-def fetch_solr_page(source: EsmaSource, *, start: int, rows: int, query: str | None = None, sort: str | None = None) -> dict[str, Any]:
+def fetch_solr_page(
+    source: EsmaSource,
+    *,
+    start: int,
+    rows: int,
+    query: str | None = None,
+    sort: str | None = None,
+    extra_params: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     params = {
         "q": query or source.default_query,
         "wt": "json",
@@ -60,9 +68,32 @@ def fetch_solr_page(source: EsmaSource, *, start: int, rows: int, query: str | N
     sort_value = sort if sort is not None else source.default_sort
     if sort_value:
         params["sort"] = sort_value
+    if extra_params:
+        params.update(extra_params)
     response = requests.get(source.solr_url, params=params, timeout=60)
     response.raise_for_status()
     return response.json()
+
+
+def parse_facet_pairs(raw: list[Any]) -> list[tuple[str, int]]:
+    """Convert Solr's flat [value, count, value, count, ...] facet list into pairs."""
+
+    pairs = list(zip(raw[0::2], raw[1::2], strict=False))
+    return [(str(value), int(count)) for value, count in pairs if count]
+
+
+def fetch_solr_facet(source: EsmaSource, *, query: str, facet_field: str, limit: int = 15) -> list[tuple[str, int]]:
+    """Return (value, count) pairs for a facet field over the *full* matching result set."""
+
+    payload = fetch_solr_page(
+        source,
+        start=0,
+        rows=0,
+        query=query,
+        extra_params={"facet": "true", "facet.field": facet_field, "facet.limit": limit, "facet.mincount": 1},
+    )
+    raw = payload.get("facet_counts", {}).get("facet_fields", {}).get(facet_field, [])
+    return parse_facet_pairs(raw)
 
 
 def iter_solr_documents(

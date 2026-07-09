@@ -11,7 +11,14 @@ from src.ingest_firds import ingest_firds
 from src.ingest_fitrs_equities import ingest_fitrs_equities
 from src.instrument_profile import build_instrument_profile
 from src.interpretations import classify_liquidity, decode_cfi, interpret_liquidity, interpret_reference_period
-from src.live_esma import LIVE_PAGE_SIZE, live_firds_search, live_fitrs_search, live_isin_bundle
+from src.live_esma import (
+    LIVE_PAGE_SIZE,
+    live_firds_search,
+    live_fitrs_liquidity_breakdown,
+    live_fitrs_search,
+    live_fitrs_venue_breakdown,
+    live_isin_bundle,
+)
 from src.portfolio import (
     InMemoryPortfolioStore,
     is_valid_isin,
@@ -28,10 +35,20 @@ from src.search_index import (
     isin_fitrs,
     isin_venues,
     liquidity_screener,
+    screener_summary,
     venue_instruments,
     venue_lookup,
 )
-from src.ui_components import dataframe, empty_state, instrument_card, metric_row, pagination_controls, setup_instructions
+from src.ui_components import (
+    csv_download_button,
+    dataframe,
+    empty_state,
+    facet_bar_chart,
+    instrument_card,
+    metric_row,
+    pagination_controls,
+    setup_instructions,
+)
 from src.utils import normalize_upper
 
 
@@ -107,6 +124,16 @@ def cached_live_isin(isin: str, rows: int):
 
 
 @st.cache_data(ttl=120, show_spinner=False)
+def cached_fitrs_liquidity_breakdown(term: str):
+    return live_fitrs_liquidity_breakdown(term)
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def cached_fitrs_venue_breakdown(term: str):
+    return live_fitrs_venue_breakdown(term)
+
+
+@st.cache_data(ttl=120, show_spinner=False)
 def cached_isin_profile(isin_key: str, use_local: bool) -> dict:
     live = cached_live_isin(isin_key, LIVE_PAGE_SIZE)
     fitrs_records = live["fitrs"].canonical.to_dict("records") if not live["fitrs"].canonical.empty else []
@@ -179,19 +206,36 @@ with tabs[0]:
     st.write("Search live ESMA FITRS equities and FIRDS. Results are fetched 20 rows at a time from ESMA.")
     term = st.text_input("Search term", placeholder="Example: XATH, NL0010273215, Allianz, Euronext")
     if term:
-        fitrs_start = live_pager("global_fitrs", cached_live_fitrs(term, 0, LIVE_PAGE_SIZE).total)
+        fitrs_total = cached_live_fitrs(term, 0, LIVE_PAGE_SIZE).total
+        st.markdown("**Live FITRS equity transparency results**")
+        metric_row({"Total FITRS matches": f"{fitrs_total:,}"})
+        agg_col1, agg_col2 = st.columns(2)
+        with agg_col1:
+            st.caption("Liquidity split across all matches")
+            facet_bar_chart(cached_fitrs_liquidity_breakdown(term), label="liquidity")
+        with agg_col2:
+            st.caption("Top venues across all matches")
+            facet_bar_chart(cached_fitrs_venue_breakdown(term), label="venue")
+        fitrs_start = live_pager("global_fitrs", fitrs_total)
         with st.spinner("Querying live ESMA FITRS equities..."):
             fitrs_live = cached_live_fitrs(term, fitrs_start, LIVE_PAGE_SIZE)
-        st.markdown("**Live FITRS equity transparency results**")
         st.caption(f"ESMA query: `{fitrs_live.query}`")
         show_live_result(fitrs_live, height=360)
+        csv_download_button(
+            fitrs_live.frame, label="Export this page (20 rows) as CSV", file_name="esma_fitrs_global_search.csv", key="global_fitrs_csv"
+        )
 
-        firds_start = live_pager("global_firds", cached_live_firds(term, 0, LIVE_PAGE_SIZE).total)
+        firds_total = cached_live_firds(term, 0, LIVE_PAGE_SIZE).total
+        st.markdown("**Live FIRDS reference results**")
+        metric_row({"Total FIRDS matches": f"{firds_total:,}"})
+        firds_start = live_pager("global_firds", firds_total)
         with st.spinner("Querying live ESMA FIRDS..."):
             firds_live = cached_live_firds(term, firds_start, LIVE_PAGE_SIZE)
-        st.markdown("**Live FIRDS reference results**")
         st.caption(f"ESMA query: `{firds_live.query}`")
         show_live_result(firds_live, height=360)
+        csv_download_button(
+            firds_live.frame, label="Export this page (20 rows) as CSV", file_name="esma_firds_global_search.csv", key="global_firds_csv"
+        )
     elif health["fitrs_equity_results_rows"] or health["firds_instruments_rows"]:
         st.info("Enter a term for live ESMA search, or use the other tabs to browse the local DuckDB cache.")
     else:
@@ -235,8 +279,10 @@ with tabs[1]:
         st.divider()
         st.markdown("**Live FITRS records for this ISIN**")
         show_live_result(live["fitrs"], height=360)
+        csv_download_button(live["fitrs"].frame, label="Export as CSV", file_name=f"esma_fitrs_{isin_key}.csv", key="isin_fitrs_csv")
         st.markdown("**Live FIRDS records for this ISIN**")
         show_live_result(live["firds"], height=360)
+        csv_download_button(live["firds"].frame, label="Export as CSV", file_name=f"esma_firds_{isin_key}.csv", key="isin_firds_csv")
         if local_loaded:
             st.markdown("**Local cache cross-check**")
             venues = isin_venues(conn, isin_key)
@@ -245,23 +291,37 @@ with tabs[1]:
             )
             if not local_fitrs.empty:
                 dataframe(local_fitrs, height=240)
+                csv_download_button(
+                    local_fitrs, label="Export local FITRS rows as CSV", file_name=f"local_fitrs_{isin_key}.csv", key="isin_local_fitrs_csv"
+                )
             if not local_firds.empty:
                 dataframe(local_firds, height=240)
+                csv_download_button(
+                    local_firds, label="Export local FIRDS rows as CSV", file_name=f"local_firds_{isin_key}.csv", key="isin_local_firds_csv"
+                )
 
 with tabs[2]:
     st.subheader("Venue Explorer")
     st.write("Search a MIC live in ESMA FITRS. Results are returned 20 rows at a time.")
     venue_search_term = st.text_input("Search MIC or venue name", placeholder="Example: XATH", key="venue_search")
     if venue_search_term:
-        venue_start = live_pager("venue_live_fitrs", cached_live_fitrs(venue_search_term, 0, LIVE_PAGE_SIZE).total)
+        venue_total = cached_live_fitrs(venue_search_term, 0, LIVE_PAGE_SIZE).total
+        metric_row({"Total matches": f"{venue_total:,}"})
+        st.caption("Liquidity split across all matches")
+        facet_bar_chart(cached_fitrs_liquidity_breakdown(venue_search_term), label="liquidity")
+        venue_start = live_pager("venue_live_fitrs", venue_total)
         with st.spinner("Querying ESMA live for this venue/MIC..."):
             venue_live = cached_live_fitrs(venue_search_term, venue_start, LIVE_PAGE_SIZE)
         st.caption(f"ESMA query: `{venue_live.query}`")
         show_live_result(venue_live, height=520)
+        csv_download_button(
+            venue_live.frame, label="Export this page (20 rows) as CSV", file_name="esma_venue_explorer.csv", key="venue_live_csv"
+        )
     elif health["fitrs_equity_results_rows"]:
         st.markdown("**Local cached venues**")
         venues = venue_lookup(conn, "", limit=1000)
         dataframe(venues, height=420)
+        csv_download_button(venues, label="Export as CSV", file_name="esma_local_venues.csv", key="venue_local_csv")
     else:
         st.info("Enter a MIC such as `XATH` to query ESMA live.")
 
@@ -311,22 +371,57 @@ with tabs[3]:
             "sort_by": sort_by,
             "sort_desc": sort_desc,
         }
-        _first, total = liquidity_screener(conn, filters, limit=1, offset=0)
+        summary = screener_summary(conn, filters)
+        total = summary["total"]
+
+        st.markdown("**Full result set overview** (covers all matching rows, not just the page below)")
+        metric_row(
+            {
+                "Total matches": f"{total:,}",
+                "Sum avg. daily turnover": f"{summary['sum_turnover']:,.0f}" if summary["sum_turnover"] else "N/A",
+                "Mean avg. daily turnover": f"{summary['mean_turnover']:,.0f}" if summary["mean_turnover"] else "N/A",
+            }
+        )
+        chart_col1, chart_col2 = st.columns(2)
+        with chart_col1:
+            st.caption("Liquid vs. non-liquid split")
+            facet_bar_chart(list(zip(summary["liquidity_breakdown"]["liquidity_status"], summary["liquidity_breakdown"]["count"])), label="liquidity")
+            st.caption("Turnover distribution")
+            facet_bar_chart(list(zip(summary["turnover_buckets"]["bucket"], summary["turnover_buckets"]["count"])), label="turnover")
+        with chart_col2:
+            st.caption("Top venues (MIC) by row count")
+            facet_bar_chart(list(zip(summary["venue_breakdown"]["mic"], summary["venue_breakdown"]["count"])), label="venue")
+            st.caption("Top countries by row count")
+            facet_bar_chart(list(zip(summary["country_breakdown"]["country"], summary["country_breakdown"]["count"])), label="country")
+        st.caption("Calculation date coverage (by month)")
+        facet_bar_chart(
+            list(zip(summary["date_coverage"]["period"], summary["date_coverage"]["count"])),
+            label="calculation date",
+        )
+
         limit, offset = pagination_controls("Screener", total, page_size)
-        screen_df, total = liquidity_screener(conn, filters, limit=limit, offset=offset)
+        screen_df, _total_page = liquidity_screener(conn, filters, limit=limit, offset=offset)
         if screen_df.empty:
             empty_state("No records match the current screener filters.")
             if search:
                 st.json(diagnostics_for_isin(conn, search, {"mic": mic}))
         else:
             dataframe(screen_df, height=520)
+            export_col1, export_col2 = st.columns(2)
             export_df = export_liquidity_screener(conn, filters)
-            st.download_button(
-                "Export filtered results as CSV",
-                data=export_df.to_csv(index=False).encode("utf-8"),
-                file_name="esma_liquidity_screener_export.csv",
-                mime="text/csv",
-            )
+            with export_col1:
+                csv_download_button(
+                    export_df, label="Export filtered results as CSV", file_name="esma_liquidity_screener_export.csv", key="screener_csv"
+                )
+            with export_col2:
+                xlsx_buffer = io.BytesIO()
+                export_df.to_excel(xlsx_buffer, index=False, engine="openpyxl")
+                st.download_button(
+                    "Export filtered results as Excel",
+                    data=xlsx_buffer.getvalue(),
+                    file_name="esma_liquidity_screener_export.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
 
 with tabs[4]:
     st.subheader("Portfolio")

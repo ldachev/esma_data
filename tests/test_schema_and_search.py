@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import duckdb
+import pytest
 
 from src.database import append_dataframe, initialize_schema, upsert_venues
 from src.schema_mapper import map_firds_records, map_fitrs_records, map_venues_from_firds, map_venues_from_fitrs
-from src.search_index import isin_fitrs, liquidity_screener, venue_instruments
+from src.search_index import isin_fitrs, liquidity_screener, screener_summary, venue_instruments
 
 
 def memory_conn():
@@ -122,3 +123,14 @@ def test_app_queries_work_when_only_firds_loaded():
     firds = map_firds_records([{"isin": "ONLYFIRDS1", "mic": "XPAR", "gnr_full_name": "Only FIRDS"}])
     append_dataframe(conn, "firds_instruments", firds)
     assert len(isin_fitrs(conn, "ONLYFIRDS1")) == 0
+
+
+def test_screener_summary_covers_full_result_set_not_just_a_page():
+    conn = memory_conn()
+    load_fixture(conn)
+    summary = screener_summary(conn, {})
+    assert summary["total"] == 2
+    assert set(summary["liquidity_breakdown"]["liquidity_status"]) == {"Non liquid", "Liquid"}
+    assert summary["sum_turnover"] == pytest.approx(3200 + 500000)
+    assert summary["turnover_buckets"]["count"].sum() == 2
+    assert summary["venue_breakdown"]["count"].sum() == 2

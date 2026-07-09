@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 import pandas as pd
 
-from .esma_sources import FIRDS, FITRS_EQUITIES, fetch_solr_page
+from .esma_sources import FIRDS, FITRS_EQUITIES, fetch_solr_facet, fetch_solr_page
 from .schema_mapper import map_firds_records, map_fitrs_records
 from .utils import normalize_upper
 
@@ -134,3 +134,21 @@ def live_isin_bundle(isin: str, *, rows: int = LIVE_PAGE_SIZE) -> dict[str, Live
         "fitrs": live_fitrs_search(isin, start=0, rows=rows),
         "firds": live_firds_search(isin, start=0, rows=rows),
     }
+
+
+def live_fitrs_liquidity_breakdown(term: str) -> list[tuple[str, int]]:
+    """Liquid/non-liquid split over the *full* live FITRS result set for this search term."""
+
+    try:
+        return fetch_solr_facet(FITRS_EQUITIES, query=build_fitrs_query(term), facet_field="liquidity_flag")
+    except Exception:
+        return []
+
+
+def live_fitrs_venue_breakdown(term: str, *, limit: int = 15) -> list[tuple[str, int]]:
+    """Top venues (MRMTL) over the *full* live FITRS result set for this search term."""
+
+    try:
+        return fetch_solr_facet(FITRS_EQUITIES, query=build_fitrs_query(term), facet_field="mrmtl", limit=limit)
+    except Exception:
+        return []
