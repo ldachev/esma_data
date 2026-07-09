@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from src.interpretations import decode_cfi, interpret_liquidity, interpret_reconciliation_notice, interpret_reference_period
+from src.interpretations import classify_liquidity, decode_cfi, interpret_liquidity, interpret_reconciliation_notice, interpret_reference_period
+
+
+def test_classify_liquidity():
+    assert classify_liquidity("Liquid") == "liquid"
+    assert classify_liquidity("Non liquid") == "non_liquid"
+    assert classify_liquidity("") == "unknown"
+    assert classify_liquidity("Maybe") == "unknown"
 
 
 def test_interpret_liquidity_non_liquid():

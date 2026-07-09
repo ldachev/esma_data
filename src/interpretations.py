@@ -12,24 +12,37 @@ from dataclasses import dataclass
 from .utils import normalize_text, normalize_upper
 
 
-def interpret_liquidity(liquidity_status: str | None) -> str:
+def classify_liquidity(liquidity_status: str | None) -> str:
+    """Classify a raw liquidity flag value into 'liquid', 'non_liquid', or 'unknown'."""
+
     status = normalize_upper(liquidity_status)
     if not status:
-        return "No liquidity flag is available for this instrument."
+        return "unknown"
     if status.startswith("NON") or status in {"N", "FALSE", "0"}:
+        return "non_liquid"
+    if status.startswith("LIQUID") or status in {"Y", "TRUE", "1"}:
+        return "liquid"
+    return "unknown"
+
+
+def interpret_liquidity(liquidity_status: str | None) -> str:
+    category = classify_liquidity(liquidity_status)
+    if category == "unknown":
+        if not normalize_text(liquidity_status):
+            return "No liquidity flag is available for this instrument."
+        return f"Liquidity flag value is '{liquidity_status}', which does not match a recognized Liquid/Non-liquid value."
+    if category == "non_liquid":
         return (
             "Flagged as **not liquid** under the FITRS calculation. Under MiFIR equity transparency rules, "
             "trading venues may apply pre-trade transparency waivers and defer post-trade publication for "
             "this instrument, since there is no liquid market obligation to publish quotes and trades in "
             "real time."
         )
-    if status.startswith("LIQUID") or status in {"Y", "TRUE", "1"}:
-        return (
-            "Flagged as **liquid** under the FITRS calculation. Under MiFIR equity transparency rules, "
-            "trading venues and investment firms trading this instrument must generally provide continuous "
-            "pre-trade quotes and publish trades close to real time, with narrower scope for waivers/deferrals."
-        )
-    return f"Liquidity flag value is '{liquidity_status}', which does not match a recognized Liquid/Non-liquid value."
+    return (
+        "Flagged as **liquid** under the FITRS calculation. Under MiFIR equity transparency rules, "
+        "trading venues and investment firms trading this instrument must generally provide continuous "
+        "pre-trade quotes and publish trades close to real time, with narrower scope for waivers/deferrals."
+    )
 
 
 def interpret_reference_period(
