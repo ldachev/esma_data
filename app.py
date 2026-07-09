@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+
 import pandas as pd
 import streamlit as st
 
@@ -8,8 +10,17 @@ from src.database import connect, data_health, diagnostics_for_isin, lookup_valu
 from src.ingest_firds import ingest_firds
 from src.ingest_fitrs_equities import ingest_fitrs_equities
 from src.instrument_profile import build_instrument_profile
-from src.interpretations import decode_cfi, interpret_liquidity, interpret_reference_period
+from src.interpretations import classify_liquidity, decode_cfi, interpret_liquidity, interpret_reference_period
 from src.live_esma import LIVE_PAGE_SIZE, live_firds_search, live_fitrs_search, live_isin_bundle
+from src.portfolio import (
+    InMemoryPortfolioStore,
+    is_valid_isin,
+    parse_bulk_isins,
+    portfolio_from_csv,
+    portfolio_from_json,
+    portfolio_to_csv,
+    portfolio_to_json,
+)
 from src.search_index import (
     export_liquidity_screener,
     global_search,
@@ -95,6 +106,18 @@ def cached_live_isin(isin: str, rows: int):
     return live_isin_bundle(isin, rows=rows)
 
 
+@st.cache_data(ttl=120, show_spinner=False)
+def cached_isin_profile(isin_key: str, use_local: bool) -> dict:
+    live = cached_live_isin(isin_key, LIVE_PAGE_SIZE)
+    fitrs_records = live["fitrs"].canonical.to_dict("records") if not live["fitrs"].canonical.empty else []
+    firds_records = live["firds"].canonical.to_dict("records") if not live["firds"].canonical.empty else []
+    if use_local:
+        with connect() as local_conn:
+            fitrs_records += isin_fitrs(local_conn, isin_key).to_dict("records")
+            firds_records += isin_firds(local_conn, isin_key).to_dict("records")
+    return build_instrument_profile(isin_key, fitrs_records, firds_records).to_dict()
+
+
 def live_pager(source_key: str, total: int, rows: int = LIVE_PAGE_SIZE) -> int:
     state_key = f"{source_key}_start"
     if state_key not in st.session_state:
@@ -130,6 +153,9 @@ def show_live_result(result, *, height: int = 360) -> None:
 conn = db_connection()
 health = data_health(conn)
 
+if "portfolio_open_isin_request" in st.session_state:
+    st.session_state["isin_explorer"] = st.session_state.pop("portfolio_open_isin_request")
+
 st.title("ESMA Equity Transparency and FIRDS Search")
 st.caption(
     "Search ESMA Equity Transparency Calculation Results and connect them to FIRDS instrument reference data."
@@ -146,7 +172,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-tabs = st.tabs(["Global Search", "ISIN Explorer", "Venue Explorer", "Liquidity Screener", "Data Health"])
+tabs = st.tabs(["Global Search", "ISIN Explorer", "Venue Explorer", "Liquidity Screener", "Portfolio", "Data Health"])
 
 with tabs[0]:
     st.subheader("Global Search")
@@ -303,6 +329,156 @@ with tabs[3]:
             )
 
 with tabs[4]:
+    st.subheader("Portfolio")
+    st.write(
+        "Save ISINs to a personal watchlist and monitor them together. The list is kept for this browser "
+        "session; use export/import below to save it to a file and reload it later."
+    )
+
+    store = InMemoryPortfolioStore(st.session_state, key="portfolio_isins")
+
+    add_col, button_col = st.columns([3, 1])
+    with add_col:
+        new_isin = st.text_input("Add a single ISIN", key="portfolio_add_isin", placeholder="Example: NL0010273215")
+    with button_col:
+        st.write("")
+        st.write("")
+        if st.button("Add ISIN", key="portfolio_add_single_btn"):
+            candidate = normalize_upper(new_isin)
+            if not candidate:
+                st.warning("Enter an ISIN first.")
+            elif not is_valid_isin(candidate):
+                st.error(f"'{candidate}' does not look like a valid ISIN (format or check digit failed).")
+            else:
+                store.add([candidate])
+                st.rerun()
+
+    with st.expander("Bulk add (paste many ISINs)"):
+        bulk_text = st.text_area(
+            "One ISIN per line, or comma/space separated", key="portfolio_bulk_text", height=120
+        )
+        if st.button("Add all", key="portfolio_add_bulk_btn"):
+            valid_isins, invalid_isins = parse_bulk_isins(bulk_text)
+            if valid_isins:
+                store.add(valid_isins)
+                st.success(f"Added {len(valid_isins)} ISIN(s).")
+            if invalid_isins:
+                st.warning(f"Skipped {len(invalid_isins)} value(s) that are not valid ISINs: {', '.join(invalid_isins)}")
+            if valid_isins:
+                st.rerun()
+
+    watchlist = store.load()
+
+    st.markdown("**Import / export watchlist**")
+    exp_json_col, exp_csv_col, import_col = st.columns(3)
+    with exp_json_col:
+        st.download_button(
+            "Export as JSON",
+            data=portfolio_to_json(watchlist),
+            file_name="esma_portfolio.json",
+            mime="application/json",
+            disabled=not watchlist,
+        )
+    with exp_csv_col:
+        st.download_button(
+            "Export as CSV",
+            data=portfolio_to_csv(watchlist),
+            file_name="esma_portfolio.csv",
+            mime="text/csv",
+            disabled=not watchlist,
+        )
+    with import_col:
+        uploaded = st.file_uploader("Import watchlist", type=["json", "csv"], key="portfolio_uploader")
+        if uploaded is not None:
+            try:
+                raw = uploaded.getvalue()
+                imported = portfolio_from_json(raw) if uploaded.name.lower().endswith(".json") else portfolio_from_csv(raw)
+            except Exception as exc:
+                imported = []
+                st.error(f"Could not parse uploaded file: {exc}")
+            if imported:
+                store.add(imported)
+                st.success(f"Imported {len(imported)} ISIN(s).")
+                st.rerun()
+
+    watchlist = store.load()
+    if not watchlist:
+        empty_state("Your portfolio is empty. Add an ISIN above to get started.")
+    else:
+        use_local = bool(health["fitrs_equity_results_rows"] or health["firds_instruments_rows"])
+        with st.spinner(f"Enriching {len(watchlist)} portfolio ISIN(s)..."):
+            profiles = [cached_isin_profile(item, use_local) for item in watchlist]
+        profile_df = pd.DataFrame(profiles)
+
+        liquidity_categories = [classify_liquidity(p.get("Liquidity flag")) for p in profiles]
+        liquid_count = liquidity_categories.count("liquid")
+        non_liquid_count = liquidity_categories.count("non_liquid")
+        turnovers = [p["Average daily turnover"] for p in profiles if p.get("Average daily turnover") is not None]
+
+        st.markdown("**Portfolio summary**")
+        metric_row(
+            {
+                "Instruments": f"{len(profiles):,}",
+                "Liquid": f"{liquid_count:,}",
+                "Non-liquid": f"{non_liquid_count:,}",
+                "Unknown liquidity": f"{len(profiles) - liquid_count - non_liquid_count:,}",
+                "Mean avg. daily turnover": f"{(sum(turnovers) / len(turnovers)):,.0f}" if turnovers else "N/A",
+            }
+        )
+
+        venue_counts = profile_df["Home/most relevant MIC"].fillna("Unknown").value_counts()
+        if not venue_counts.empty:
+            st.markdown("**Venue breakdown**")
+            st.bar_chart(venue_counts)
+
+        st.markdown("**Portfolio holdings**")
+        display_cols = [
+            "ISIN",
+            "Instrument name",
+            "Home/most relevant MIC",
+            "Liquidity flag",
+            "Average daily turnover",
+            "Average daily number of transactions",
+            "Calculation date",
+            "In FITRS",
+            "In FIRDS",
+        ]
+        dataframe(profile_df[display_cols], height=360)
+
+        export_col1, export_col2 = st.columns(2)
+        with export_col1:
+            st.download_button(
+                "Export enriched portfolio as CSV",
+                data=profile_df.to_csv(index=False).encode("utf-8"),
+                file_name="esma_portfolio_enriched.csv",
+                mime="text/csv",
+            )
+        with export_col2:
+            xlsx_buffer = io.BytesIO()
+            profile_df.to_excel(xlsx_buffer, index=False, engine="openpyxl")
+            st.download_button(
+                "Export enriched portfolio as Excel",
+                data=xlsx_buffer.getvalue(),
+                file_name="esma_portfolio_enriched.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+
+        st.markdown("**Row actions**")
+        for item in watchlist:
+            profile_row = next((p for p in profiles if p["ISIN"] == item), {})
+            row_name_col, row_open_col, row_remove_col = st.columns([3, 1, 1])
+            with row_name_col:
+                st.write(f"**{item}** - {profile_row.get('Instrument name') or 'Unknown name'}")
+            with row_open_col:
+                if st.button("Open in ISIN Explorer", key=f"portfolio_open_{item}"):
+                    st.session_state["portfolio_open_isin_request"] = item
+                    st.rerun()
+            with row_remove_col:
+                if st.button("Remove", key=f"portfolio_remove_{item}"):
+                    store.remove(item)
+                    st.rerun()
+
+with tabs[5]:
     st.subheader("Data Health")
     metric_row(
         {
