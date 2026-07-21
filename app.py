@@ -191,7 +191,7 @@ def show_live_result(result, *, height: int = 360) -> None:
     else:
         column_config = None
         if "More Info" in result.frame.columns:
-            column_config = {"More Info": st.column_config.LinkColumn("More Info", display_text="Open ESMA")}
+            column_config = {"More Info": st.column_config.LinkColumn("More Info", display_text="Open ESMA Register")}
         dataframe(result.frame, height=height, column_config=column_config)
 
 

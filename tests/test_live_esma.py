@@ -58,7 +58,7 @@ def test_live_fitrs_display_columns_are_in_requested_order(monkeypatch):
         "More Info",
     ]
     assert result.frame.loc[0, "ADT"] == 12345.67
-    assert "esma_registers_fitrs_equities/select" in result.frame.loc[0, "More Info"]
+    assert result.frame.loc[0, "More Info"].endswith("publication/searchRegister?core=esma_registers_fitrs_equities")
 
 
 def test_live_firds_display_columns_are_in_requested_order(monkeypatch):
@@ -102,4 +102,4 @@ def test_live_firds_display_columns_are_in_requested_order(monkeypatch):
         "More Info",
     ]
     assert result.frame.loc[0, "Request for admission to trading by issuer"] == "true"
-    assert "esma_registers_firds/select" in result.frame.loc[0, "More Info"]
+    assert result.frame.loc[0, "More Info"].endswith("publication/searchRegister?core=esma_registers_firds")

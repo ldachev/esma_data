@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from urllib.parse import urlencode
 
 import pandas as pd
 
@@ -117,26 +116,10 @@ def _payload_total(payload: dict) -> int:
     return int(payload.get("response", {}).get("numFound", 0))
 
 
-def _record_query(row: pd.Series) -> str:
-    record_id = str(row.get("source_record_id") or "").strip()
-    if record_id:
-        return f'id:"{record_id}"'
-    isin = str(row.get("isin") or "").strip()
-    if isin:
-        return f'isin:"{isin}"'
-    mic = str(row.get("mic") or "").strip()
-    if mic:
-        return f'mic:"{mic}"'
-    return "*:*"
-
-
 def _display_frame(frame: pd.DataFrame, display_columns: dict[str, str], source) -> pd.DataFrame:
     display = frame.copy()
     if "more_info" in display_columns:
-        display["more_info"] = [
-            f"{source.solr_url}?{urlencode({'q': _record_query(row), 'wt': 'json', 'rows': 1})}"
-            for _, row in display.iterrows()
-        ]
+        display["more_info"] = source.publication_url
     for column in display_columns:
         if column not in display.columns:
             display[column] = pd.NA
