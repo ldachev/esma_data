@@ -29,8 +29,8 @@ def pagination_controls(prefix: str, total: int, page_size: int) -> tuple[int, i
     return page_size, offset
 
 
-def dataframe(df: pd.DataFrame, *, height: int = 420) -> None:
-    st.dataframe(df, width="stretch", hide_index=True, height=height)
+def dataframe(df: pd.DataFrame, *, height: int = 420, column_config: dict | None = None) -> None:
+    st.dataframe(df, width="stretch", hide_index=True, height=height, column_config=column_config)
 
 
 def empty_state(message: str) -> None:

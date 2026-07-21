@@ -24,7 +24,6 @@ from src.live_esma import (
     live_firds_search,
     live_fitrs_liquidity_breakdown,
     live_fitrs_search,
-    live_fitrs_venue_breakdown,
     live_isin_bundle,
 )
 from src.portfolio import (
@@ -138,11 +137,6 @@ def cached_fitrs_liquidity_breakdown(term: str):
 
 
 @st.cache_data(ttl=120, show_spinner=False)
-def cached_fitrs_venue_breakdown(term: str):
-    return live_fitrs_venue_breakdown(term)
-
-
-@st.cache_data(ttl=120, show_spinner=False)
 def cached_isin_profile(isin_key: str, use_local: bool) -> dict:
     live = cached_live_isin(isin_key, LIVE_PAGE_SIZE)
     fitrs_records = live["fitrs"].canonical.to_dict("records") if not live["fitrs"].canonical.empty else []
@@ -183,7 +177,10 @@ def show_live_result(result, *, height: int = 360) -> None:
     elif result.frame.empty:
         empty_state(f"No live {result.source} results.")
     else:
-        dataframe(result.frame, height=height)
+        column_config = None
+        if "More Info" in result.frame.columns:
+            column_config = {"More Info": st.column_config.LinkColumn("More Info", display_text="Open ESMA")}
+        dataframe(result.frame, height=height, column_config=column_config)
 
 
 def set_query_param(param: str, value: str | None) -> None:
@@ -251,13 +248,6 @@ with tabs[0]:
         fitrs_total = cached_live_fitrs(term, 0, LIVE_PAGE_SIZE).total
         st.markdown("**Live FITRS equity transparency results**")
         metric_row({"Total FITRS matches": f"{fitrs_total:,}"})
-        agg_col1, agg_col2 = st.columns(2)
-        with agg_col1:
-            st.caption("Liquidity split across all matches")
-            facet_bar_chart(cached_fitrs_liquidity_breakdown(term), label="liquidity")
-        with agg_col2:
-            st.caption("Top venues across all matches")
-            facet_bar_chart(cached_fitrs_venue_breakdown(term), label="venue")
         fitrs_start = live_pager("global_fitrs", fitrs_total)
         with st.spinner("Querying live ESMA FITRS equities..."):
             fitrs_live = cached_live_fitrs(term, fitrs_start, LIVE_PAGE_SIZE)

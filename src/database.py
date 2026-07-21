@@ -78,6 +78,7 @@ def initialize_schema(conn: duckdb.DuckDBPyConnection) -> None:
             regulated_market VARCHAR,
             country VARCHAR,
             venue_type VARCHAR,
+            request_for_admission_by_issuer VARCHAR,
             source_file_name VARCHAR,
             source_record_id VARCHAR,
             ingestion_timestamp TIMESTAMP,
@@ -89,6 +90,7 @@ def initialize_schema(conn: duckdb.DuckDBPyConnection) -> None:
         "ALTER TABLE firds_instruments ADD COLUMN IF NOT EXISTS notional_currency_1 VARCHAR",
         "ALTER TABLE firds_instruments ADD COLUMN IF NOT EXISTS rca_mic VARCHAR",
         "ALTER TABLE firds_instruments ADD COLUMN IF NOT EXISTS regulated_market VARCHAR",
+        "ALTER TABLE firds_instruments ADD COLUMN IF NOT EXISTS request_for_admission_by_issuer VARCHAR",
     ):
         conn.execute(statement)
     conn.execute(

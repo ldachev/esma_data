@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from urllib.parse import urlencode
 
 import pandas as pd
 
@@ -16,16 +17,15 @@ LIVE_PAGE_SIZE = 20
 LIVE_FIRDS_DISPLAY_COLUMNS = {
     "isin": "Instrument identification code",
     "mic": "Trading venue",
-    "instrument_full_name": "Instrument Full name",
+    "instrument_full_name": "Instrument full name",
     "classification": "Instrument classification",
     "issuer_lei": "Issuer or operator of the trading venue identifier",
     "admission_date": "Date of admission to trading or date of first trade",
     "termination_date": "Termination date",
-    "notional_currency_1": "Notional currency 1",
     "short_name": "Financial instrument short name",
+    "request_for_admission_by_issuer": "Request for admission to trading by issuer",
     "rca_mic": "RCA MIC",
-    "regulated_market": "Regulated market",
-    "country": "Country",
+    "more_info": "More Info",
 }
 
 LIVE_FITRS_DISPLAY_COLUMNS = {
@@ -34,11 +34,12 @@ LIVE_FITRS_DISPLAY_COLUMNS = {
     "calculation_period_from": "Calculation From Date",
     "calculation_period_to": "Calculation To Date",
     "liquidity_status": "Liquidity Flag",
-    "lis_threshold": "LIS Threshold",
-    "avt_currency": "AVT Currency",
+    "avg_daily_turnover": "ADT",
     "mic": "MRMTL",
     "adnte_on_mrmtl": "ADNTE on MRMTL",
     "mifir_identifier": "Mifir Identifier",
+    "cfi_code": "CFI Code",
+    "more_info": "More Info",
 }
 
 
@@ -106,6 +107,32 @@ def _payload_total(payload: dict) -> int:
     return int(payload.get("response", {}).get("numFound", 0))
 
 
+def _record_query(row: pd.Series) -> str:
+    record_id = str(row.get("source_record_id") or "").strip()
+    if record_id:
+        return f'id:"{record_id}"'
+    isin = str(row.get("isin") or "").strip()
+    if isin:
+        return f'isin:"{isin}"'
+    mic = str(row.get("mic") or "").strip()
+    if mic:
+        return f'mic:"{mic}"'
+    return "*:*"
+
+
+def _display_frame(frame: pd.DataFrame, display_columns: dict[str, str], source) -> pd.DataFrame:
+    display = frame.copy()
+    if "more_info" in display_columns:
+        display["more_info"] = [
+            f"{source.solr_url}?{urlencode({'q': _record_query(row), 'wt': 'json', 'rows': 1})}"
+            for _, row in display.iterrows()
+        ]
+    for column in display_columns:
+        if column not in display.columns:
+            display[column] = pd.NA
+    return display[list(display_columns)].rename(columns=display_columns).copy()
+
+
 def live_fitrs_search(term: str, *, start: int = 0, rows: int = LIVE_PAGE_SIZE) -> LiveResult:
     query = build_fitrs_query(term)
     try:
@@ -114,7 +141,7 @@ def live_fitrs_search(term: str, *, start: int = 0, rows: int = LIVE_PAGE_SIZE) 
         return empty_live_result("FITRS equities", query, start, rows, str(exc))
     docs = payload.get("response", {}).get("docs", [])
     frame = map_fitrs_records(docs, source_file_name="live:esma_registers_fitrs_equities")
-    display = frame[list(LIVE_FITRS_DISPLAY_COLUMNS)].rename(columns=LIVE_FITRS_DISPLAY_COLUMNS).copy()
+    display = _display_frame(frame, LIVE_FITRS_DISPLAY_COLUMNS, FITRS_EQUITIES)
     return LiveResult(
         display, _payload_total(payload), start, rows, query, "FITRS equities", canonical=frame, fetched_at=utc_now_iso()
     )
@@ -128,7 +155,7 @@ def live_firds_search(term: str, *, start: int = 0, rows: int = LIVE_PAGE_SIZE) 
         return empty_live_result("FIRDS", query, start, rows, str(exc))
     docs = payload.get("response", {}).get("docs", [])
     frame = map_firds_records(docs, source_file_name="live:esma_registers_firds")
-    display = frame[list(LIVE_FIRDS_DISPLAY_COLUMNS)].rename(columns=LIVE_FIRDS_DISPLAY_COLUMNS).copy()
+    display = _display_frame(frame, LIVE_FIRDS_DISPLAY_COLUMNS, FIRDS)
     return LiveResult(
         display, _payload_total(payload), start, rows, query, "FIRDS", canonical=frame, fetched_at=utc_now_iso()
     )

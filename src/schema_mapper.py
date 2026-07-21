@@ -55,6 +55,7 @@ FIRDS_COLUMNS = [
     "regulated_market",
     "country",
     "venue_type",
+    "request_for_admission_by_issuer",
     "source_file_name",
     "source_record_id",
     "ingestion_timestamp",
@@ -103,9 +104,15 @@ FIRDS_SYNONYMS: dict[str, list[str]] = {
     "termination_date": ["mrkt_trdng_trmination_date", "termination_date"],
     "notional_currency_1": ["gnr_notional_curr_code", "notional_currency_1", "notional_curr_code"],
     "rca_mic": ["rca_mic", "relevant_competent_authority_mic"],
-    "regulated_market": ["regulated_market", "rmkt", "mrkt_issr_trdng_rqst_flag"],
+    "regulated_market": ["regulated_market", "rmkt"],
     "country": ["upcoming_rca", "country", "country_code"],
     "venue_type": ["venue_type", "market_type"],
+    "request_for_admission_by_issuer": [
+        "mrkt_issr_trdng_rqst_flag",
+        "request_for_admission_to_trading_by_issuer",
+        "request_for_admission_by_issuer",
+        "issuer_trading_request_flag",
+    ],
 }
 
 
@@ -200,6 +207,9 @@ def map_firds_records(records: list[dict[str, Any]], source_file_name: str = "es
                 "regulated_market": normalize_text(_value(record, FIRDS_SYNONYMS, "regulated_market")),
                 "country": normalize_upper(_value(record, FIRDS_SYNONYMS, "country")),
                 "venue_type": normalize_upper(_value(record, FIRDS_SYNONYMS, "venue_type")),
+                "request_for_admission_by_issuer": normalize_text(
+                    _value(record, FIRDS_SYNONYMS, "request_for_admission_by_issuer")
+                ),
                 "source_file_name": source_file_name,
                 "source_record_id": normalize_text(record.get("id") or record.get("_root_")),
                 "ingestion_timestamp": ts,
