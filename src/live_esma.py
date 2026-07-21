@@ -71,13 +71,23 @@ def _escape_solr_term(value: str) -> str:
     return f'"{escaped}"'
 
 
-def build_fitrs_query(term: str) -> str:
+def build_fitrs_query(term: str, *, methodology: str | None = None, liquidity_flag: str | None = None) -> str:
     key = normalize_upper(term)
     if not key:
-        return "*:*"
-    quoted = _escape_solr_term(key)
-    wildcard = key.replace(" ", "\\ ")
-    return f'isin:{quoted} OR mrmtl:{quoted} OR cfi_code:{wildcard}* OR mifir_identifier:{wildcard}*'
+        base = "*:*"
+    else:
+        quoted = _escape_solr_term(key)
+        wildcard = key.replace(" ", "\\ ")
+        base = f'isin:{quoted} OR mrmtl:{quoted} OR cfi_code:{wildcard}* OR mifir_identifier:{wildcard}*'
+
+    clauses = []
+    if methodology:
+        clauses.append(f"methodology:{_escape_solr_term(methodology)}")
+    if liquidity_flag:
+        clauses.append(f"liquidity_flag:{_escape_solr_term(liquidity_flag)}")
+    if clauses:
+        return f"({base}) AND " + " AND ".join(clauses)
+    return base
 
 
 def build_firds_query(term: str) -> str:
@@ -133,8 +143,15 @@ def _display_frame(frame: pd.DataFrame, display_columns: dict[str, str], source)
     return display[list(display_columns)].rename(columns=display_columns).copy()
 
 
-def live_fitrs_search(term: str, *, start: int = 0, rows: int = LIVE_PAGE_SIZE) -> LiveResult:
-    query = build_fitrs_query(term)
+def live_fitrs_search(
+    term: str,
+    *,
+    start: int = 0,
+    rows: int = LIVE_PAGE_SIZE,
+    methodology: str | None = None,
+    liquidity_flag: str | None = None,
+) -> LiveResult:
+    query = build_fitrs_query(term, methodology=methodology, liquidity_flag=liquidity_flag)
     try:
         payload = fetch_solr_page(FITRS_EQUITIES, start=start, rows=rows, query=query)
     except Exception as exc:
@@ -173,6 +190,15 @@ def live_fitrs_liquidity_breakdown(term: str) -> list[tuple[str, int]]:
 
     try:
         return fetch_solr_facet(FITRS_EQUITIES, query=build_fitrs_query(term), facet_field="liquidity_flag")
+    except Exception:
+        return []
+
+
+def live_fitrs_methodology_breakdown(term: str) -> list[tuple[str, int]]:
+    """Methodology split over the *full* live FITRS result set for this search term."""
+
+    try:
+        return fetch_solr_facet(FITRS_EQUITIES, query=build_fitrs_query(term), facet_field="methodology", limit=50)
     except Exception:
         return []
 

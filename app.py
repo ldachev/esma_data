@@ -23,6 +23,7 @@ from src.live_esma import (
     LIVE_PAGE_SIZE,
     live_firds_search,
     live_fitrs_liquidity_breakdown,
+    live_fitrs_methodology_breakdown,
     live_fitrs_search,
     live_isin_bundle,
 )
@@ -117,8 +118,14 @@ def bootstrap_starter_data() -> None:
 
 
 @st.cache_data(ttl=120, show_spinner=False)
-def cached_live_fitrs(term: str, start: int, rows: int):
-    return live_fitrs_search(term, start=start, rows=rows)
+def cached_live_fitrs(term: str, start: int, rows: int, methodology: str = "", liquidity_flag: str = ""):
+    return live_fitrs_search(
+        term,
+        start=start,
+        rows=rows,
+        methodology=methodology or None,
+        liquidity_flag=liquidity_flag or None,
+    )
 
 
 @st.cache_data(ttl=120, show_spinner=False)
@@ -134,6 +141,11 @@ def cached_live_isin(isin: str, rows: int):
 @st.cache_data(ttl=120, show_spinner=False)
 def cached_fitrs_liquidity_breakdown(term: str):
     return live_fitrs_liquidity_breakdown(term)
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def cached_fitrs_methodology_breakdown(term: str):
+    return live_fitrs_methodology_breakdown(term)
 
 
 @st.cache_data(ttl=120, show_spinner=False)
@@ -245,12 +257,42 @@ with tabs[0]:
     )
     set_query_param("q", term)
     if term:
-        fitrs_total = cached_live_fitrs(term, 0, LIVE_PAGE_SIZE).total
+        method_pairs = cached_fitrs_methodology_breakdown(term)
+        liquidity_pairs = cached_fitrs_liquidity_breakdown(term)
+        methodology_options = [""] + [value for value, _count in method_pairs]
+        liquidity_options = [""] + [value for value, _count in liquidity_pairs]
+        seed_choice_state("global_fitrs_methodology", "fitrs_methodology", options=methodology_options, default="")
+        seed_choice_state("global_fitrs_liquidity", "fitrs_liquidity", options=liquidity_options, default="")
+        if st.session_state.get("global_fitrs_methodology") not in methodology_options:
+            st.session_state["global_fitrs_methodology"] = ""
+        if st.session_state.get("global_fitrs_liquidity") not in liquidity_options:
+            st.session_state["global_fitrs_liquidity"] = ""
+        filter_col1, filter_col2 = st.columns(2)
+        with filter_col1:
+            methodology_filter = st.selectbox(
+                "Methodology",
+                methodology_options,
+                format_func=lambda value: value or "All methodologies",
+                help="Filters the live FITRS equity results by ESMA methodology.",
+                key="global_fitrs_methodology",
+            )
+        with filter_col2:
+            liquidity_filter = st.selectbox(
+                "Liquidity flag",
+                liquidity_options,
+                format_func=lambda value: value or "All liquidity flags",
+                help="Filters the live FITRS equity results by ESMA liquidity flag, such as Liquid or Non liquid.",
+                key="global_fitrs_liquidity",
+            )
+        set_query_param("fitrs_methodology", methodology_filter)
+        set_query_param("fitrs_liquidity", liquidity_filter)
+
+        fitrs_total = cached_live_fitrs(term, 0, LIVE_PAGE_SIZE, methodology_filter, liquidity_filter).total
         st.markdown("**Live FITRS equity transparency results**")
         metric_row({"Total FITRS matches": f"{fitrs_total:,}"})
         fitrs_start = live_pager("global_fitrs", fitrs_total)
         with st.spinner("Querying live ESMA FITRS equities..."):
-            fitrs_live = cached_live_fitrs(term, fitrs_start, LIVE_PAGE_SIZE)
+            fitrs_live = cached_live_fitrs(term, fitrs_start, LIVE_PAGE_SIZE, methodology_filter, liquidity_filter)
         st.caption(f"ESMA query: `{fitrs_live.query}`")
         provenance_line(mode="live", source="FITRS equities (registers.esma.europa.eu)", as_of=fitrs_live.fetched_at)
         show_live_result(fitrs_live, height=360)

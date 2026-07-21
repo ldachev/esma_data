@@ -1,10 +1,22 @@
 from __future__ import annotations
 
-from src.live_esma import live_firds_search, live_fitrs_search
+from src.live_esma import build_fitrs_query, live_firds_search, live_fitrs_search
+
+
+def test_build_fitrs_query_combines_methodology_and_liquidity_filters():
+    query = build_fitrs_query("XATH", methodology="YEAR", liquidity_flag="Non liquid")
+
+    assert '(isin:"XATH" OR mrmtl:"XATH"' in query
+    assert 'methodology:"YEAR"' in query
+    assert 'liquidity_flag:"Non liquid"' in query
+    assert ") AND " in query
 
 
 def test_live_fitrs_display_columns_are_in_requested_order(monkeypatch):
+    calls = []
+
     def fake_fetch(source, *, start, rows, query, sort=None, extra_params=None):
+        calls.append(query)
         return {
             "response": {
                 "numFound": 1,
@@ -28,8 +40,10 @@ def test_live_fitrs_display_columns_are_in_requested_order(monkeypatch):
 
     monkeypatch.setattr("src.live_esma.fetch_solr_page", fake_fetch)
 
-    result = live_fitrs_search("NL0010273215")
+    result = live_fitrs_search("NL0010273215", methodology="YEAR", liquidity_flag="Liquid")
 
+    assert 'methodology:"YEAR"' in calls[0]
+    assert 'liquidity_flag:"Liquid"' in calls[0]
     assert list(result.frame.columns) == [
         "ISIN",
         "Methodology",
