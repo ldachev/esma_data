@@ -119,7 +119,11 @@ def _payload_total(payload: dict) -> int:
 def _display_frame(frame: pd.DataFrame, display_columns: dict[str, str], source) -> pd.DataFrame:
     display = frame.copy()
     if "more_info" in display_columns:
-        display["more_info"] = source.publication_url
+        record_ids = display["source_record_id"] if "source_record_id" in display.columns else [None] * len(display)
+        display["more_info"] = [
+            source.details_url(str(record_id).strip()) if str(record_id or "").strip() else source.publication_url
+            for record_id in record_ids
+        ]
     for column in display_columns:
         if column not in display.columns:
             display[column] = pd.NA

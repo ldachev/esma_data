@@ -7,6 +7,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
 import requests
 
@@ -16,6 +17,7 @@ from .utils import write_json
 
 ESMA_SOLR_BASE = "https://registers.esma.europa.eu/solr"
 ESMA_PUBLICATION_BASE = "https://registers.esma.europa.eu/publication/searchRegister"
+ESMA_DETAILS_BASE = "https://registers.esma.europa.eu/publication/details"
 
 
 @dataclass(frozen=True)
@@ -33,6 +35,9 @@ class EsmaSource:
     @property
     def publication_url(self) -> str:
         return f"{ESMA_PUBLICATION_BASE}?core={self.core}"
+
+    def details_url(self, doc_id: str) -> str:
+        return f"{ESMA_DETAILS_BASE}?{urlencode({'core': self.core, 'docId': doc_id})}"
 
 
 FITRS_EQUITIES = EsmaSource(
