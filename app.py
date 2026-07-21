@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from datetime import date
 import io
+from types import SimpleNamespace
 
 import pandas as pd
 import streamlit as st
@@ -20,6 +22,7 @@ from src.ingest_fitrs_equities import ingest_fitrs_equities
 from src.instrument_profile import build_instrument_profile
 from src.interpretations import classify_liquidity, decode_cfi, interpret_liquidity, interpret_reference_period
 from src.live_esma import (
+    LIVE_FITRS_DISPLAY_COLUMNS,
     LIVE_PAGE_SIZE,
     live_firds_search,
     live_fitrs_liquidity_breakdown,
@@ -158,6 +161,21 @@ def cached_isin_profile(isin_key: str, use_local: bool) -> dict:
             fitrs_records += isin_fitrs(local_conn, isin_key).to_dict("records")
             firds_records += isin_firds(local_conn, isin_key).to_dict("records")
     return build_instrument_profile(isin_key, fitrs_records, firds_records).to_dict()
+
+
+@st.cache_data(ttl=120, show_spinner=False)
+def cached_portfolio_fitrs(isins: tuple[str, ...], calculation_year: int | None) -> tuple[pd.DataFrame, list[str]]:
+    frames: list[pd.DataFrame] = []
+    errors: list[str] = []
+    for isin in isins:
+        result = live_fitrs_search(isin, rows=100, calculation_year=calculation_year)
+        if result.error:
+            errors.append(f"{isin}: {result.error}")
+        if not result.frame.empty:
+            frames.append(result.frame)
+    if not frames:
+        return pd.DataFrame(columns=list(LIVE_FITRS_DISPLAY_COLUMNS.values())), errors
+    return pd.concat(frames, ignore_index=True), errors
 
 
 def live_pager(source_key: str, total: int, rows: int = LIVE_PAGE_SIZE) -> int:
@@ -621,78 +639,86 @@ with tabs[4]:
     if not watchlist:
         empty_state("Your portfolio is empty. Add an ISIN above to get started.")
     else:
-        use_local = bool(health["fitrs_equity_results_rows"] or health["firds_instruments_rows"])
-        with st.spinner(f"Enriching {len(watchlist)} portfolio ISIN(s)..."):
-            profiles = [cached_isin_profile(item, use_local) for item in watchlist]
-        profile_df = pd.DataFrame(profiles)
-        if use_local:
-            provenance_line(
-                mode="cached",
-                source="Live ESMA queries, cross-checked against local DuckDB cache",
-                as_of=freshness["fitrs"] or freshness["firds"],
-            )
-        else:
-            provenance_line(mode="live", source="Live ESMA queries (no local cache loaded)", as_of="just now (cached up to 2 min)")
+        year_options = [""] + [str(year) for year in range(date.today().year, 2019, -1)]
+        seed_choice_state("portfolio_fitrs_year", "portfolio_year", options=year_options, default="")
+        year_filter = st.selectbox(
+            "Calculation year",
+            year_options,
+            format_func=lambda value: value or "All years",
+            help="Filters portfolio FITRS rows by ESMA calculation period year, for example 2025.",
+            key="portfolio_fitrs_year",
+        )
+        set_query_param("portfolio_year", year_filter)
+        calculation_year = int(year_filter) if year_filter else None
 
-        liquidity_categories = [classify_liquidity(p.get("Liquidity flag")) for p in profiles]
+        with st.spinner(f"Querying live ESMA FITRS for {len(watchlist)} portfolio ISIN(s)..."):
+            portfolio_fitrs_df, portfolio_errors = cached_portfolio_fitrs(tuple(watchlist), calculation_year)
+
+        provenance_line(mode="live", source="Live ESMA FITRS portfolio queries", as_of="just now (cached up to 2 min)")
+        if portfolio_errors:
+            st.warning("Some portfolio FITRS queries failed: " + "; ".join(portfolio_errors[:5]))
+        if calculation_year:
+            st.caption(f"Year filter: calculation_period_from in {calculation_year}.")
+        else:
+            st.caption("Year filter: all ESMA FITRS calculation periods.")
+
+        liquidity_categories = [classify_liquidity(value) for value in portfolio_fitrs_df.get("Liquidity Flag", [])]
         liquid_count = liquidity_categories.count("liquid")
         non_liquid_count = liquidity_categories.count("non_liquid")
-        turnovers = [p["Average daily turnover"] for p in profiles if p.get("Average daily turnover") is not None]
+        turnovers = pd.to_numeric(portfolio_fitrs_df.get("ADT", pd.Series(dtype=float)), errors="coerce").dropna()
 
         st.markdown("**Portfolio summary**")
         metric_row(
             {
-                "Instruments": f"{len(profiles):,}",
+                "ISINs": f"{len(watchlist):,}",
+                "FITRS rows": f"{len(portfolio_fitrs_df):,}",
                 "Liquid": f"{liquid_count:,}",
                 "Non-liquid": f"{non_liquid_count:,}",
-                "Unknown liquidity": f"{len(profiles) - liquid_count - non_liquid_count:,}",
-                "Mean avg. daily turnover": f"{(sum(turnovers) / len(turnovers)):,.0f}" if turnovers else "N/A",
+                "Unknown liquidity": f"{len(portfolio_fitrs_df) - liquid_count - non_liquid_count:,}",
+                "Mean ADT": f"{turnovers.mean():,.0f}" if not turnovers.empty else "N/A",
             }
         )
 
-        venue_counts = profile_df["Home/most relevant MIC"].fillna("Unknown").value_counts()
+        venue_counts = portfolio_fitrs_df["MRMTL"].fillna("Unknown").value_counts() if "MRMTL" in portfolio_fitrs_df else pd.Series(dtype=int)
         if not venue_counts.empty:
             st.markdown("**Venue breakdown**")
             st.bar_chart(venue_counts)
 
-        st.markdown("**Portfolio holdings**")
-        display_cols = [
-            "ISIN",
-            "Instrument name",
-            "Home/most relevant MIC",
-            "Liquidity flag",
-            "Average daily turnover",
-            "Average daily number of transactions",
-            "Calculation date",
-            "In FITRS",
-            "In FIRDS",
-        ]
-        dataframe(profile_df[display_cols], height=360)
+        st.markdown("**Portfolio FITRS equity transparency results**")
+        show_live_result(
+            SimpleNamespace(
+                error=None,
+                frame=portfolio_fitrs_df,
+                source="FITRS equities",
+            ),
+            height=420,
+        )
 
         export_col1, export_col2 = st.columns(2)
         with export_col1:
             st.download_button(
-                "Export enriched portfolio as CSV",
-                data=profile_df.to_csv(index=False).encode("utf-8"),
-                file_name="esma_portfolio_enriched.csv",
+                "Export portfolio FITRS rows as CSV",
+                data=portfolio_fitrs_df.to_csv(index=False).encode("utf-8"),
+                file_name="esma_portfolio_fitrs.csv",
                 mime="text/csv",
+                disabled=portfolio_fitrs_df.empty,
             )
         with export_col2:
             xlsx_buffer = io.BytesIO()
-            profile_df.to_excel(xlsx_buffer, index=False, engine="openpyxl")
+            portfolio_fitrs_df.to_excel(xlsx_buffer, index=False, engine="openpyxl")
             st.download_button(
-                "Export enriched portfolio as Excel",
+                "Export portfolio FITRS rows as Excel",
                 data=xlsx_buffer.getvalue(),
-                file_name="esma_portfolio_enriched.xlsx",
+                file_name="esma_portfolio_fitrs.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                disabled=portfolio_fitrs_df.empty,
             )
 
         st.markdown("**Row actions**")
         for item in watchlist:
-            profile_row = next((p for p in profiles if p["ISIN"] == item), {})
             row_name_col, row_open_col, row_remove_col = st.columns([3, 1, 1])
             with row_name_col:
-                st.write(f"**{item}** - {profile_row.get('Instrument name') or 'Unknown name'}")
+                st.write(f"**{item}**")
             with row_open_col:
                 if st.button("Open in ISIN Explorer", key=f"portfolio_open_{item}"):
                     st.session_state["portfolio_open_isin_request"] = item

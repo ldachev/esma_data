@@ -70,7 +70,13 @@ def _escape_solr_term(value: str) -> str:
     return f'"{escaped}"'
 
 
-def build_fitrs_query(term: str, *, methodology: str | None = None, liquidity_flag: str | None = None) -> str:
+def build_fitrs_query(
+    term: str,
+    *,
+    methodology: str | None = None,
+    liquidity_flag: str | None = None,
+    calculation_year: int | str | None = None,
+) -> str:
     key = normalize_upper(term)
     if not key:
         base = "*:*"
@@ -84,6 +90,9 @@ def build_fitrs_query(term: str, *, methodology: str | None = None, liquidity_fl
         clauses.append(f"methodology:{_escape_solr_term(methodology)}")
     if liquidity_flag:
         clauses.append(f"liquidity_flag:{_escape_solr_term(liquidity_flag)}")
+    if calculation_year:
+        year = int(calculation_year)
+        clauses.append(f"calculation_period_from:[{year}-01-01T00:00:00Z TO {year}-12-31T23:59:59Z]")
     if clauses:
         return f"({base}) AND " + " AND ".join(clauses)
     return base
@@ -137,8 +146,14 @@ def live_fitrs_search(
     rows: int = LIVE_PAGE_SIZE,
     methodology: str | None = None,
     liquidity_flag: str | None = None,
+    calculation_year: int | str | None = None,
 ) -> LiveResult:
-    query = build_fitrs_query(term, methodology=methodology, liquidity_flag=liquidity_flag)
+    query = build_fitrs_query(
+        term,
+        methodology=methodology,
+        liquidity_flag=liquidity_flag,
+        calculation_year=calculation_year,
+    )
     try:
         payload = fetch_solr_page(FITRS_EQUITIES, start=start, rows=rows, query=query)
     except Exception as exc:

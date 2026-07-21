@@ -12,6 +12,13 @@ def test_build_fitrs_query_combines_methodology_and_liquidity_filters():
     assert ") AND " in query
 
 
+def test_build_fitrs_query_filters_by_calculation_year():
+    query = build_fitrs_query("IT0005412504", calculation_year=2025)
+
+    assert 'isin:"IT0005412504"' in query
+    assert "calculation_period_from:[2025-01-01T00:00:00Z TO 2025-12-31T23:59:59Z]" in query
+
+
 def test_live_fitrs_display_columns_are_in_requested_order(monkeypatch):
     calls = []
 
