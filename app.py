@@ -64,6 +64,9 @@ from src.ui_components import (
 from src.utils import normalize_upper
 
 
+GLOBAL_FIRDS_PAGE_SIZE = 100
+
+
 st.set_page_config(page_title="ESMA Equity Search", page_icon="EU", layout="wide")
 
 st.markdown(
@@ -188,14 +191,14 @@ def live_pager(source_key: str, total: int, rows: int = LIVE_PAGE_SIZE) -> int:
     st.session_state[state_key] = current
     left, mid, right = st.columns([1, 2, 1])
     with left:
-        if st.button("Previous 20", key=f"{source_key}_prev", disabled=current <= 0):
+        if st.button(f"Previous {rows}", key=f"{source_key}_prev", disabled=current <= 0):
             st.session_state[state_key] = max(0, current - rows)
             st.rerun()
     with mid:
         end = min(current + rows, total)
         st.caption(f"Showing {current + 1 if total else 0:,}-{end:,} of {total:,} live ESMA rows.")
     with right:
-        if st.button("Next 20", key=f"{source_key}_next", disabled=current + rows >= total):
+        if st.button(f"Next {rows}", key=f"{source_key}_next", disabled=current + rows >= total):
             st.session_state[state_key] = current + rows
             st.rerun()
     return int(st.session_state[state_key])
@@ -318,17 +321,17 @@ with tabs[0]:
             fitrs_live.frame, label="Export this page (20 rows) as CSV", file_name="esma_fitrs_global_search.csv", key="global_fitrs_csv"
         )
 
-        firds_total = cached_live_firds(term, 0, LIVE_PAGE_SIZE).total
+        firds_total = cached_live_firds(term, 0, GLOBAL_FIRDS_PAGE_SIZE).total
         st.markdown("**Live FIRDS reference results**")
         metric_row({"Total FIRDS matches": f"{firds_total:,}"})
-        firds_start = live_pager("global_firds", firds_total)
+        firds_start = live_pager("global_firds", firds_total, rows=GLOBAL_FIRDS_PAGE_SIZE)
         with st.spinner("Querying live ESMA FIRDS..."):
-            firds_live = cached_live_firds(term, firds_start, LIVE_PAGE_SIZE)
+            firds_live = cached_live_firds(term, firds_start, GLOBAL_FIRDS_PAGE_SIZE)
         st.caption(f"ESMA query: `{firds_live.query}`")
         provenance_line(mode="live", source="FIRDS (registers.esma.europa.eu)", as_of=firds_live.fetched_at)
         show_live_result(firds_live, height=360)
         csv_download_button(
-            firds_live.frame, label="Export this page (20 rows) as CSV", file_name="esma_firds_global_search.csv", key="global_firds_csv"
+            firds_live.frame, label="Export this page (100 rows) as CSV", file_name="esma_firds_global_search.csv", key="global_firds_csv"
         )
     elif health["fitrs_equity_results_rows"] or health["firds_instruments_rows"]:
         st.info("Enter a term for live ESMA search, or use the other tabs to browse the local DuckDB cache.")
